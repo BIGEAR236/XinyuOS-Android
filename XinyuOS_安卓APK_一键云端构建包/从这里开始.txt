@@ -1,0 +1,7 @@
+心屿 OS V3.1（安卓一机一码激活）
+1. 这份是 Flutter 源码，不是 APK。
+2. 生成 APK 需要 Flutter/Android SDK 或 GitHub Actions。
+3. 不要把管理员发码工具分享给用户。
+4. 用户第一次打开 App 会看到设备号，给你后由私有管理员工具生成激活码。
+5. 用户填写自己的 API Key 连接模型。
+详细阅读 README.md。

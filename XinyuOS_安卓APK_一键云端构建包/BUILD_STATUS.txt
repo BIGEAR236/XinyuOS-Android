@@ -1,0 +1,10 @@
+2026-11-04 本轮打包状态
+- 原生 APK: 未生成（环境缺少 Flutter SDK、Android SDK、Gradle、对外下载网络）
+- Flutter 源码: 已准备
+- Android Release APK 工作流: 已配置
+- 稳定签名私钥: 已生成并只放私有文件夹，不在公用工程源码中
+- Android Debug APK 工作流: 已配置
+- 源码静态检查: 运行后见验证输出
+- 激活向量签名验证: 运行后见验证输出
+- Flutter analyze / flutter test / flutter build apk --release: 未在本环境运行
+- 真机 API 连接与激活：未验证
