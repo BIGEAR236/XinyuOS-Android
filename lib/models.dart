@@ -67,26 +67,35 @@ class Character {
   String? apiProfileId;
   bool allowMoments;
   bool allowSocialInteractions; // separately authorized; defaults OFF
+  bool allowProactiveMessages; // separately authorized; defaults OFF
   List<String> friendIds; // reciprocal, local AI-to-AI friendships
   int avatarColor;
   String avatarPath; // app-private relative image path
+  String intro; // short public profile description, not the persona file
+  String chatBackgroundPath; // app-private image for this private conversation
   Character({required this.id, required this.name, required this.persona,
     this.apiProfileId, this.allowMoments = false,
-    this.allowSocialInteractions = false, this.friendIds = const [],
+    this.allowSocialInteractions = false, this.allowProactiveMessages = false,
+    this.friendIds = const [],
     this.avatarColor = 0xFFB67BB8,
-    this.avatarPath = ''});
+    this.avatarPath = '', this.intro = '', this.chatBackgroundPath = ''});
   factory Character.fromJson(Map<String, dynamic> j) => Character(
     id: '${j['id'] ?? newId()}', name: '${j['name'] ?? '未命名'}',
     persona: '${j['persona'] ?? ''}', apiProfileId: j['apiProfileId'] as String?,
     allowMoments: j['allowMoments'] == true,
     allowSocialInteractions: j['allowSocialInteractions'] == true,
+    allowProactiveMessages: j['allowProactiveMessages'] == true,
     friendIds: (j['friendIds'] as List? ?? []).map((v) => '$v').toList(),
     avatarColor: (j['avatarColor'] as num?)?.toInt() ?? 0xFFB67BB8,
-    avatarPath: '${j['avatarPath'] ?? ''}');
+    avatarPath: '${j['avatarPath'] ?? ''}',
+    intro: '${j['intro'] ?? ''}',
+    chatBackgroundPath: '${j['chatBackgroundPath'] ?? ''}');
   Map<String, dynamic> toJson() => {'id': id, 'name': name, 'persona': persona,
     'apiProfileId': apiProfileId, 'allowMoments': allowMoments,
-    'allowSocialInteractions': allowSocialInteractions, 'friendIds': friendIds,
-    'avatarColor': avatarColor, 'avatarPath': avatarPath};
+    'allowSocialInteractions': allowSocialInteractions,
+    'allowProactiveMessages': allowProactiveMessages, 'friendIds': friendIds,
+    'avatarColor': avatarColor, 'avatarPath': avatarPath,
+    'intro': intro, 'chatBackgroundPath': chatBackgroundPath};
 }
 
 class ChatGroup {
@@ -110,14 +119,29 @@ class ChatEntry {
   String senderId; // 'me', 'system', or character ID
   String text;
   DateTime createdAt;
+  String? quotedText;
+  String? quotedSender;
+  String? forwardedFrom;
+  DateTime? editedAt;
+  bool recalled;
   ChatEntry({required this.id, required this.threadId, required this.senderId,
-    required this.text, required this.createdAt});
+    required this.text, required this.createdAt, this.quotedText,
+    this.quotedSender, this.forwardedFrom, this.editedAt,
+    this.recalled = false});
   factory ChatEntry.fromJson(Map<String, dynamic> j) => ChatEntry(
     id: '${j['id'] ?? newId()}', threadId: '${j['threadId'] ?? ''}',
     senderId: '${j['senderId'] ?? ''}', text: '${j['text'] ?? ''}',
-    createdAt: DateTime.tryParse('${j['createdAt'] ?? ''}') ?? DateTime.now());
+    createdAt: DateTime.tryParse('${j['createdAt'] ?? ''}') ?? DateTime.now(),
+    quotedText: j['quotedText'] as String?,
+    quotedSender: j['quotedSender'] as String?,
+    forwardedFrom: j['forwardedFrom'] as String?,
+    editedAt: DateTime.tryParse('${j['editedAt'] ?? ''}'),
+    recalled: j['recalled'] == true);
   Map<String, dynamic> toJson() => {'id': id, 'threadId': threadId,
-    'senderId': senderId, 'text': text, 'createdAt': createdAt.toIso8601String()};
+    'senderId': senderId, 'text': text, 'createdAt': createdAt.toIso8601String(),
+    'quotedText': quotedText, 'quotedSender': quotedSender,
+    'forwardedFrom': forwardedFrom, 'editedAt': editedAt?.toIso8601String(),
+    'recalled': recalled};
 }
 
 class MomentComment {
@@ -168,6 +192,43 @@ class LocalTrack {
     'relativePath': relativePath};
 }
 
+/// An opt-in, locally stored upcoming event. The phone schedules a generic
+/// notification; a real AI response is generated only when the app is opened.
+class ProactiveEvent {
+  String id;
+  String characterId;
+  String topic;
+  DateTime dueAt;
+  bool delivered;
+  DateTime? lastAttemptAt;
+  ProactiveEvent({required this.id, required this.characterId,
+    required this.topic, required this.dueAt,
+    this.delivered = false, this.lastAttemptAt});
+  factory ProactiveEvent.fromJson(Map<String, dynamic> j) => ProactiveEvent(
+    id: '${j['id'] ?? newId()}', characterId: '${j['characterId'] ?? ''}',
+    topic: '${j['topic'] ?? ''}',
+    dueAt: DateTime.tryParse('${j['dueAt'] ?? ''}') ?? DateTime.now(),
+    delivered: j['delivered'] == true,
+    lastAttemptAt: DateTime.tryParse('${j['lastAttemptAt'] ?? ''}'));
+  Map<String, dynamic> toJson() => {'id': id, 'characterId': characterId,
+    'topic': topic, 'dueAt': dueAt.toIso8601String(),
+    'delivered': delivered, 'lastAttemptAt': lastAttemptAt?.toIso8601String()};
+}
+
+const List<String> defaultDesktopOrder = ['chat', 'api', 'music', 'settings'];
+
+List<String> normalizeDesktopOrder(Object? raw) {
+  final incoming = raw is List ? raw.map((v) => '$v') : const <String>[];
+  final result = <String>[];
+  for (final key in incoming) {
+    if (defaultDesktopOrder.contains(key) && !result.contains(key)) result.add(key);
+  }
+  for (final key in defaultDesktopOrder) {
+    if (!result.contains(key)) result.add(key);
+  }
+  return result;
+}
+
 class AppData {
   List<ApiProfile> profiles;
   List<Character> characters;
@@ -180,6 +241,7 @@ class AppData {
   double fontScale;
   String wallpaperPath;
   Map<String, String> desktopIcons;
+  List<String> desktopOrder; // user-set icon position, preserved between launches
   bool autoMomentReplies; // only for user comments; defaults OFF
   bool autoMomentInteractions; // foreground only; defaults OFF
   DateTime? lastAutoInteractionAt;
@@ -187,14 +249,19 @@ class AppData {
   int myBubbleColor;
   int aiBubbleColor;
   bool showChatTime;
+  String chatMode; // daily / story
+  bool allowProactiveMessages;
+  List<ProactiveEvent> proactiveEvents;
   AppData({required this.profiles, required this.characters, required this.groups,
     required this.messages, required this.moments, required this.tracks,
     this.darkMode = false, this.themeColor = 0xFF8870B5, this.fontScale = 1,
     this.wallpaperPath = '', this.desktopIcons = const {},
+    this.desktopOrder = defaultDesktopOrder,
     this.autoMomentReplies = false, this.autoMomentInteractions = false,
     this.lastAutoInteractionAt, this.chatBubbleOpacity = 1.0,
     this.myBubbleColor = 0xFFB8EC9C, this.aiBubbleColor = 0xFFFFFFFF,
-    this.showChatTime = false});
+    this.showChatTime = false, this.chatMode = 'daily',
+    this.allowProactiveMessages = false, this.proactiveEvents = const []});
   factory AppData.initial() => AppData(
     profiles: [], characters: [
       Character(id: 'sample_xiaoman', name: '小满',
@@ -204,7 +271,8 @@ class AppData {
       Character(id: 'sample_aze', name: '阿泽',
         persona: '你叫阿泽，性格沉稳、理性，偶尔冷幽默。'
           '说话简洁，乐于倾听，不随意断言现实事实。', avatarColor: 0xFF8BA9D1),
-    ], groups: [], messages: [], moments: [], tracks: []);
+    ], groups: [], messages: [], moments: [], tracks: [],
+    proactiveEvents: []);
   factory AppData.fromJson(Map<String, dynamic> j) => AppData(
     profiles: listJson(j['profiles']).map(ApiProfile.fromJson).toList(),
     characters: listJson(j['characters']).map(Character.fromJson).toList(),
@@ -217,15 +285,20 @@ class AppData {
     fontScale: (j['fontScale'] as num?)?.toDouble() ?? 1,
     wallpaperPath: '${j['wallpaperPath'] ?? ''}',
     desktopIcons: mapJson(j['desktopIcons']).map((k, v) => MapEntry(k, '$v')),
+    desktopOrder: normalizeDesktopOrder(j['desktopOrder']),
     autoMomentReplies: j['autoMomentReplies'] == true,
     autoMomentInteractions: j['autoMomentInteractions'] == true,
     lastAutoInteractionAt: DateTime.tryParse('${j['lastAutoInteractionAt'] ?? ''}'),
     chatBubbleOpacity: ((j['chatBubbleOpacity'] as num?)?.toDouble() ?? 1.0).clamp(.35, 1.0).toDouble(),
     myBubbleColor: (j['myBubbleColor'] as num?)?.toInt() ?? 0xFFB8EC9C,
     aiBubbleColor: (j['aiBubbleColor'] as num?)?.toInt() ?? 0xFFFFFFFF,
-    showChatTime: j['showChatTime'] == true);
+    showChatTime: j['showChatTime'] == true,
+    chatMode: j['chatMode'] == 'story' ? 'story' : 'daily',
+    allowProactiveMessages: j['allowProactiveMessages'] == true,
+    proactiveEvents: listJson(j['proactiveEvents'])
+      .map(ProactiveEvent.fromJson).toList());
   Map<String, dynamic> toJson() => {
-    'version': 4,
+    'version': 6,
     'profiles': profiles.map((v) => v.toJson()).toList(),
     'characters': characters.map((v) => v.toJson()).toList(),
     'groups': groups.map((v) => v.toJson()).toList(),
@@ -234,13 +307,15 @@ class AppData {
     'tracks': tracks.map((v) => v.toJson()).toList(),
     'darkMode': darkMode, 'themeColor': themeColor,
     'fontScale': fontScale, 'wallpaperPath': wallpaperPath,
-    'desktopIcons': desktopIcons,
+    'desktopIcons': desktopIcons, 'desktopOrder': desktopOrder,
     'autoMomentReplies': autoMomentReplies,
     'autoMomentInteractions': autoMomentInteractions,
     'lastAutoInteractionAt': lastAutoInteractionAt?.toIso8601String(),
     'chatBubbleOpacity': chatBubbleOpacity,
     'myBubbleColor': myBubbleColor, 'aiBubbleColor': aiBubbleColor,
-    'showChatTime': showChatTime,
+    'showChatTime': showChatTime, 'chatMode': chatMode,
+    'allowProactiveMessages': allowProactiveMessages,
+    'proactiveEvents': proactiveEvents.map((e) => e.toJson()).toList(),
   };
   String serialize() => jsonEncode(toJson());
 }

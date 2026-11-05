@@ -8,6 +8,7 @@ import 'local_data.dart';
 import 'ui_chat.dart';
 import 'ui_contacts.dart';
 import 'ui_extras.dart';
+import 'ui_social_settings.dart';
 
 void uiError(BuildContext context, Object error) {
   if (!context.mounted) return;
@@ -50,12 +51,61 @@ class PhoneHomeScreen extends StatelessWidget {
   final AppController controller;
   const PhoneHomeScreen({super.key, required this.controller});
 
+  Widget _desktopTile(BuildContext context, String key) {
+    late final IconData icon;
+    late final String title;
+    late final Color color;
+    late final Widget destination;
+    switch (key) {
+      case 'chat':
+        icon = Icons.chat_bubble_rounded; title = '心屿通讯';
+        color = const Color(0xFF78BBA1);
+        destination = SocialScreen(controller: controller); break;
+      case 'api':
+        icon = Icons.hub_rounded; title = 'API 连接';
+        color = const Color(0xFF809AD2);
+        destination = ApiProfileListScreen(controller: controller); break;
+      case 'music':
+        icon = Icons.music_note_rounded; title = '本地音乐';
+        color = const Color(0xFFCA8DA6);
+        destination = MusicScreen(controller: controller); break;
+      default:
+        icon = Icons.settings_rounded; title = '设置';
+        color = const Color(0xFF8B8C98);
+        destination = SettingsScreen(controller: controller); break;
+    }
+    Widget item() => HomeIcon(icon: icon, name: title, color: color,
+      iconPath: controller.data.desktopIcons[key], local: controller.local,
+      onTap: () => Navigator.push(context,
+        MaterialPageRoute(builder: (_) => destination)));
+    return DragTarget<String>(
+      onWillAcceptWithDetails: (details) => details.data != key &&
+        defaultDesktopOrder.contains(details.data),
+      onAcceptWithDetails: (details) =>
+        controller.reorderDesktopIcon(details.data, key),
+      builder: (context, incoming, rejected) => AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        decoration: BoxDecoration(
+          color: incoming.isNotEmpty ? Colors.white24 : Colors.transparent,
+          borderRadius: BorderRadius.circular(16)),
+        child: LongPressDraggable<String>(
+          data: key, maxSimultaneousDrags: 1,
+          feedback: Material(type: MaterialType.transparency,
+            child: Opacity(opacity: .88, child: item())),
+          childWhenDragging: Opacity(opacity: .24, child: item()),
+          child: item(),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final file = controller.data.wallpaperPath.isEmpty ? null :
       controller.local.resolve(controller.data.wallpaperPath);
     final current = DateTime.now();
-    return Scaffold(body: Stack(fit: StackFit.expand, children: [
+    return AnimatedBuilder(animation: controller, builder: (context, _) =>
+      Scaffold(body: Stack(fit: StackFit.expand, children: [
       Container(decoration: const BoxDecoration(gradient: LinearGradient(
         begin: Alignment.topLeft, end: Alignment.bottomRight,
         colors: [Color(0xFF6C6D9B), Color(0xFFB8A9C9), Color(0xFFE8C9C1)]))),
@@ -74,30 +124,19 @@ class PhoneHomeScreen extends StatelessWidget {
           const Spacer(),
           MiniPlayer(controller: controller),
           const SizedBox(height: 12),
-          Wrap(spacing: 22, runSpacing: 25, alignment: WrapAlignment.center,
-            children: [
-              HomeIcon(icon: Icons.chat_bubble_rounded, name: '心屿通讯',
-                iconPath: controller.data.desktopIcons['chat'], local: controller.local,
-                color: const Color(0xFF78BBA1), onTap: () => Navigator.push(
-                  context, MaterialPageRoute(builder: (_) => SocialScreen(controller: controller)))),
-              HomeIcon(icon: Icons.hub_rounded, name: 'API 连接',
-                iconPath: controller.data.desktopIcons['api'], local: controller.local,
-                color: const Color(0xFF809AD2), onTap: () => Navigator.push(
-                  context, MaterialPageRoute(builder: (_) => ApiProfileListScreen(controller: controller)))),
-              HomeIcon(icon: Icons.music_note_rounded, name: '本地音乐',
-                iconPath: controller.data.desktopIcons['music'], local: controller.local,
-                color: const Color(0xFFCA8DA6), onTap: () => Navigator.push(
-                  context, MaterialPageRoute(builder: (_) => MusicScreen(controller: controller)))),
-              HomeIcon(icon: Icons.settings_rounded, name: '设置',
-                iconPath: controller.data.desktopIcons['settings'], local: controller.local,
-                color: const Color(0xFF8B8C98), onTap: () => Navigator.push(
-                  context, MaterialPageRoute(builder: (_) => SettingsScreen(controller: controller)))),
-            ]),
+          ConstrainedBox(constraints: const BoxConstraints(maxWidth: 276),
+            child: Wrap(spacing: 20, runSpacing: 22,
+              alignment: WrapAlignment.center,
+              children: normalizeDesktopOrder(controller.data.desktopOrder)
+                .map((key) => _desktopTile(context, key)).toList())),
+          const SizedBox(height: 18),
+          const Text('长按图标并拖到另一图标上，可调整桌面顺序',
+            style: TextStyle(color: Colors.white70, fontSize: 11)),
           const Spacer(),
           Container(width: 110, height: 5, decoration: BoxDecoration(
             color: Colors.white70, borderRadius: BorderRadius.circular(8))),
         ]))),
-    ]));
+    ])));
   }
 }
 
@@ -135,8 +174,25 @@ class SocialScreen extends StatefulWidget {
   @override
   State<SocialScreen> createState() => _SocialScreenState();
 }
-class _SocialScreenState extends State<SocialScreen> {
+class _SocialScreenState extends State<SocialScreen> with WidgetsBindingObserver {
   int index = 0;
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) widget.controller.processDueEvents();
+    });
+  }
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) widget.controller.processDueEvents();
+  }
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
   @override
   Widget build(BuildContext context) {
     final titles = ['聊天', '通讯录', '朋友圈', '我的'];
@@ -262,17 +318,13 @@ class MyTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) => ListView(children: [
     const ListTile(leading: CircleAvatar(child: Icon(Icons.auto_awesome)),
-      title: Text('心屿 OS'), subtitle: Text('V3.3 · 本地优先 · AI 社交')),
+      title: Text('心屿 OS'), subtitle: Text('V3.5 · 本地优先 · AI 社交')),
     const Divider(),
-    ListTile(leading: const Icon(Icons.hub_outlined), title: const Text('API 管理'),
-      subtitle: const Text('添加服务商、测试连接、修改模型'),
+    ListTile(leading: const Icon(Icons.tune_outlined), title: const Text('通讯设置'),
+      subtitle: const Text('聊天、界面与显示、朋友权限、存储空间、主动关怀'),
       trailing: const Icon(Icons.chevron_right),
       onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) =>
-        ApiProfileListScreen(controller: controller)))),
-    ListTile(leading: const Icon(Icons.settings_outlined), title: const Text('外观和本地设置'),
-      trailing: const Icon(Icons.chevron_right),
-      onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) =>
-        SettingsScreen(controller: controller)))),
+        SocialSettingsScreen(controller: controller)))),
     const ListTile(leading: Icon(Icons.privacy_tip_outlined),
       title: Text('关于隐私'),
       subtitle: Text('聊天存在本机；API Key 存系统安全存储。云端模型会收到你发出的内容。')),

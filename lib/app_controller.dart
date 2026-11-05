@@ -8,6 +8,7 @@ import 'api_client.dart';
 import 'local_data.dart';
 import 'models.dart';
 import 'music_controller.dart';
+import 'proactive_service.dart';
 
 class AppController extends ChangeNotifier {
   final LocalData local;
@@ -22,6 +23,9 @@ class AppController extends ChangeNotifier {
   final Set<String> _stopped = {};
   final Map<String, http.Client> _clients = {};
   String? persistenceError;
+  bool _proactiveRunning = false;
+  DateTime? _lastProactiveCheck;
+
 
   AppController(this.local, this.data) { music = MusicController(local); }
   static Future<AppController> create() async {
@@ -112,6 +116,46 @@ class AppController extends ChangeNotifier {
     _changed();
   }
 
+  void updateCharacterIntro(String id, {required String name,
+      required String intro, required String persona, required String avatarPath}) {
+    final c = character(id);
+    if (c == null) return;
+    c.name = name.trim();
+    c.intro = intro.trim();
+    c.persona = persona;
+    c.avatarPath = avatarPath;
+    _changed();
+  }
+
+  void bindCharacterModel(String id, String? profileId) {
+    final c = character(id);
+    if (c == null) return;
+    c.apiProfileId = profileId;
+    _changed();
+  }
+
+  void setCharacterBackground(String id, String relativePath) {
+    final c = character(id);
+    if (c == null) return;
+    c.chatBackgroundPath = relativePath;
+    _changed();
+  }
+
+  void reorderDesktopIcon(String dragged, String target) {
+    if (dragged == target || !defaultDesktopOrder.contains(dragged) ||
+        !defaultDesktopOrder.contains(target)) return;
+    final order = normalizeDesktopOrder(data.desktopOrder);
+    order.remove(dragged);
+    order.insert(order.indexOf(target), dragged);
+    data.desktopOrder = order;
+    _changed();
+  }
+
+  void resetDesktopOrder() {
+    data.desktopOrder = [...defaultDesktopOrder];
+    _changed();
+  }
+
   void setSocialPermission(String id, bool value) {
     final c = character(id);
     if (c == null) return;
@@ -167,6 +211,120 @@ class AppController extends ChangeNotifier {
     data.lastAutoInteractionAt = now;
     _changed();
     return inviteMomentInteractions(eligible.id);
+  }
+
+  void setChatMode(String value) {
+    data.chatMode = value == 'story' ? 'story' : 'daily';
+    _changed();
+  }
+
+  Future<void> setAllowProactive(bool value) async {
+    data.allowProactiveMessages = value;
+    _changed();
+    for (final event in data.proactiveEvents) {
+      if (value && !event.delivered &&
+          character(event.characterId)?.allowProactiveMessages == true) {
+        await ProactiveNotificationService.schedule(event,
+          displayName(event.characterId));
+      } else {
+        await ProactiveNotificationService.cancel(event.id);
+      }
+    }
+  }
+
+  Future<void> setCharacterProactive(String characterId, bool value) async {
+    final c = character(characterId);
+    if (c == null) return;
+    c.allowProactiveMessages = value;
+    _changed();
+    for (final event in data.proactiveEvents.where((e) =>
+        e.characterId == characterId && !e.delivered)) {
+      if (value && data.allowProactiveMessages) {
+        await ProactiveNotificationService.schedule(event, c.name);
+      } else {
+        await ProactiveNotificationService.cancel(event.id);
+      }
+    }
+  }
+
+  Future<void> addProactiveEvent(ProactiveEvent event) async {
+    data.proactiveEvents.add(event);
+    _changed();
+    if (data.allowProactiveMessages &&
+        character(event.characterId)?.allowProactiveMessages == true) {
+      await ProactiveNotificationService.schedule(event,
+        displayName(event.characterId));
+    }
+  }
+
+  Future<void> removeProactiveEvent(String id) async {
+    data.proactiveEvents.removeWhere((e) => e.id == id);
+    _changed();
+    await ProactiveNotificationService.cancel(id);
+  }
+
+  void clearLocalChatHistory() {
+    if (busy.isNotEmpty) return;
+    data.messages.clear();
+    _changed();
+  }
+
+  void clearThreadHistory(String threadId) {
+    if (busy.contains(threadId)) return;
+    data.messages.removeWhere((m) => m.threadId == threadId);
+    _changed();
+  }
+
+  /// Only when foreground / app opened. Never runs LLM requests autonomously
+  /// while killed. Scheduled OS notification is a static event reminder.
+  Future<void> processDueEvents() async {
+    if (_proactiveRunning || !data.allowProactiveMessages) return;
+    final now = DateTime.now();
+    if (_lastProactiveCheck != null &&
+        now.difference(_lastProactiveCheck!) < const Duration(seconds: 25)) return;
+    _lastProactiveCheck = now;
+    final candidates = data.proactiveEvents.where((e) => !e.delivered &&
+      !e.dueAt.isAfter(now) && now.difference(e.dueAt) < const Duration(days: 3) &&
+      (e.lastAttemptAt == null ||
+        now.difference(e.lastAttemptAt!) > const Duration(minutes: 30))).toList();
+    if (candidates.isEmpty) return;
+    final ev = candidates.first;
+    final c = character(ev.characterId);
+    if (c == null || !c.allowProactiveMessages) return;
+    final p = profile(c.apiProfileId);
+    if (p == null) return;
+    final key = await getKey(p.id);
+    if (key == null || key.isEmpty) return;
+    final thread = privateThread(c.id);
+    if (busy.contains(thread)) return;
+    _proactiveRunning = true;
+    ev.lastAttemptAt = now;
+    _changed();
+    busy.add(thread); notifyListeners();
+    final client = http.Client(); _clients[thread] = client;
+    try {
+      final previous = _turns(thread, c.id);
+      final note = ModelTurn('user',
+        '这是用户曾授权你在此时主动关心的待办事件。主题：「${ev.topic}」。'
+        '原定日期：${ev.dueAt.year}-${ev.dueAt.month}-${ev.dueAt.day}。'
+        '现在日期：${now.year}-${now.month}-${now.day}。'
+        '你是${c.name}。请只生成一条贴合实际时间和上文的简短自然关心消息，'
+        '不要假装对方已经参加比赛或你知道比赛结果，最多45字。'
+        '不要引用角色档案或写括号动作。');
+      final answer = await MultiModelApi.call(client: client,
+        profile: p, apiKey: key, persona: c.persona, roleName: c.name,
+        chatMode: 'daily', turns: [...previous, note]);
+      if (answer.trim().isNotEmpty) {
+        _addMessage(thread, c.id, answer.trim());
+        ev.delivered = true;
+        _changed();
+      }
+    } catch (_) {
+      // Keep event pending; retry only after cooldown and once app is opened.
+    } finally {
+      client.close(); _clients.remove(thread);
+      busy.remove(thread); _proactiveRunning = false; notifyListeners();
+    }
   }
 
   void setChatStyle({double? opacity, int? mine, int? theirs, bool? showTime}) {
@@ -387,12 +545,25 @@ $context
 
   List<ModelTurn> _turns(String threadId, String aiId, {bool group = false}) {
     final entries = threadMessages(threadId)
-        .where((m) => m.senderId != 'system').toList();
+        .where((m) => m.senderId != 'system' && !m.recalled).toList();
     final recent = entries.length > 12 ? entries.sublist(entries.length - 12) : entries;
-    return recent.map((entry) => ModelTurn(
-      entry.senderId == aiId ? 'assistant' : 'user',
-      group ? '${displayName(entry.senderId)}：${entry.text}' : entry.text,
-    )).toList();
+    return recent.map((entry) {
+      var content = _entryContext(entry);
+      // Old V3.3 roleplay paragraphs can prime the model to continue acting.
+      // Keep a concise context representation in daily-chat mode.
+      if (data.chatMode == 'daily' && entry.senderId == aiId) {
+        content = content.replaceAll(RegExp(r'（[^）]{0,400}）'), '')
+          .replaceAll(RegExp(r'\([^)]{0,400}\)'), '').trim();
+        if (content.length > 450) content = content.substring(0, 450);
+      }
+      return ModelTurn(entry.senderId == aiId ? 'assistant' : 'user',
+        group ? '${displayName(entry.senderId)}：$content' : content);
+    }).where((turn) => turn.text.trim().isNotEmpty).toList();
+  }
+
+  String _entryContext(ChatEntry entry) {
+    if (entry.quotedText == null || entry.quotedText!.isEmpty) return entry.text;
+    return '引用「${entry.quotedSender ?? '对方'}：${entry.quotedText}」\n${entry.text}';
   }
 
   void editMessage(String threadId, String messageId, String newText) {
@@ -401,13 +572,41 @@ $context
       (m) => m.id == messageId && m.threadId == threadId);
     if (index < 0) return;
     final target = data.messages[index];
+    if (target.senderId == 'system' || target.recalled) return;
     target.text = newText.trim();
+    target.editedAt = DateTime.now();
     // Editing an old user message invalidates generated replies after it.
     if (target.senderId == 'me') {
       data.messages.removeWhere((m) => m.threadId == threadId &&
         m.createdAt.isAfter(target.createdAt));
     }
     _changed();
+  }
+
+  /// Local-only recall: no remote endpoint, no retroactive AI unlearning.
+  void recallMyMessage(String threadId, String messageId) {
+    if (busy.contains(threadId)) return;
+    final m = data.messages.where((e) => e.id == messageId && e.threadId == threadId)
+      .firstOrNull;
+    if (m == null || m.senderId != 'me' || m.recalled) return;
+    m.text = ''; m.quotedText = null; m.quotedSender = null; m.recalled = true;
+    _changed();
+  }
+
+  void deleteLocalMessages(String threadId, Set<String> messageIds) {
+    if (busy.contains(threadId)) return;
+    data.messages.removeWhere((m) => m.threadId == threadId && messageIds.contains(m.id));
+    _changed();
+  }
+
+  void forwardLocalMessages(String fromThread, String toThread, List<String> messageIds) {
+    if (busy.contains(toThread)) return;
+    final selected = threadMessages(fromThread)
+      .where((m) => messageIds.contains(m.id) && !m.recalled).toList();
+    if (selected.isEmpty) return;
+    final text = selected.map((m) => '${displayName(m.senderId)}：${m.text}').join('\n');
+    _addMessage(toThread, 'me', text.length > 5000 ? text.substring(0,5000) : text,
+      forwardedFrom: selected.length == 1 ? displayName(selected.first.senderId) : '聊天记录');
   }
 
   /// Re-answer the last private user turn without adding another user bubble.
@@ -424,13 +623,14 @@ $context
     if (key == null || key.isEmpty) return '请先填写 API Key。';
     final prior = entries.sublist(0, lastUser + 1);
     final recent = prior.length > 12 ? prior.sublist(prior.length - 12) : prior;
-    final turns = recent.map((m) => ModelTurn(
-      m.senderId == c.id ? 'assistant' : 'user', m.text)).toList();
+    final turns = recent.where((m) => !m.recalled).map((m) => ModelTurn(
+      m.senderId == c.id ? 'assistant' : 'user', _entryContext(m))).toList();
     busy.add(thread); _stopped.remove(thread); notifyListeners();
     final client = http.Client(); _clients[thread] = client;
     try {
       final reply = await MultiModelApi.call(client: client, profile: p,
         apiKey: key, persona: c.persona, roleName: c.name, turns: turns,
+        chatMode: data.chatMode,
         onText: (text) { if (!_stopped.contains(thread)) _partial(thread,c.id,text); });
       if (!_stopped.contains(thread)) {
         final lastUserAt = prior.last.createdAt;
@@ -444,20 +644,23 @@ $context
       busy.remove(thread); _stopped.remove(thread); notifyListeners(); }
   }
 
-  void _addMessage(String thread, String sender, String text) {
+  void _addMessage(String thread, String sender, String text,
+      {String? quotedText, String? quotedSender, String? forwardedFrom}) {
     data.messages.add(ChatEntry(id: newId(), threadId: thread, senderId: sender,
-      text: text, createdAt: DateTime.now()));
+      text: text, createdAt: DateTime.now(), quotedText: quotedText,
+      quotedSender: quotedSender, forwardedFrom: forwardedFrom));
     _changed();
   }
 
-  Future<String?> sendPrivate(Character c, String text) async {
+  Future<String?> sendPrivate(Character c, String text, {ChatEntry? quote}) async {
     final thread = privateThread(c.id);
     if (busy.contains(thread)) return '上一条回复仍在生成中。';
     final p = profile(c.apiProfileId);
     if (p == null) return '请先在好友资料中绑定 API 配置。';
     final key = await getKey(p.id);
     if (key == null || key.isEmpty) return '此 API 配置没有密钥，请先补充密钥。';
-    _addMessage(thread, 'me', text);
+    _addMessage(thread, 'me', text,
+      quotedText: quote?.text, quotedSender: quote == null ? null : displayName(quote.senderId));
     _stopped.remove(thread);
     busy.add(thread);
     notifyListeners();
@@ -466,7 +669,7 @@ $context
     try {
       final answer = await MultiModelApi.call(client: client, profile: p,
         apiKey: key, persona: c.persona, roleName: c.name,
-        turns: _turns(thread, c.id),
+        chatMode: data.chatMode, turns: _turns(thread, c.id),
         onText: (text) {
           if (!_stopped.contains(thread)) _partial(thread, c.id, text);
         });
@@ -485,10 +688,11 @@ $context
     }
   }
 
-  Future<String?> sendGroup(ChatGroup group, String text) async {
+  Future<String?> sendGroup(ChatGroup group, String text, {ChatEntry? quote}) async {
     final thread = groupThread(group.id);
     if (busy.contains(thread)) return '当前群聊正在生成回复。';
-    _addMessage(thread, 'me', text);
+    _addMessage(thread, 'me', text,
+      quotedText: quote?.text, quotedSender: quote == null ? null : displayName(quote.senderId));
     _stopped.remove(thread);
     busy.add(thread);
     notifyListeners();
@@ -509,7 +713,7 @@ $context
         try {
           final answer = await MultiModelApi.call(client: client,
             profile: p, apiKey: key, persona: c.persona,
-            roleName: c.name,
+            roleName: c.name, chatMode: data.chatMode,
             turns: _turns(thread, c.id, group: true), group: true,
             onText: (text) {
               if (!_stopped.contains(thread)) _partial(thread, c.id, text);

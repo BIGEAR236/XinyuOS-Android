@@ -9,6 +9,7 @@ import 'app_controller.dart';
 import 'local_data.dart';
 import 'models.dart';
 import 'ui_chat.dart';
+import 'ui_extras.dart';
 import 'ui_shell.dart';
 
 class ApiProfileListScreen extends StatelessWidget {
@@ -312,50 +313,376 @@ class ContactsTab extends StatelessWidget {
   ]);
 }
 
+/// Compact contact hub and separate settings screens. The long persona document is
+/// deliberately not displayed on the contact landing page.
 class CharacterDetailScreen extends StatelessWidget {
   final AppController controller;
   final String characterId;
   const CharacterDetailScreen({super.key, required this.controller,
     required this.characterId});
+
+  void _open(BuildContext context, Widget screen) {
+    Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
+  }
+
   @override
-  Widget build(BuildContext context) => AnimatedBuilder(animation: controller,
-    builder: (context, _) {
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: controller, builder: (context, _) {
+      final c = controller.character(characterId);
+      if (c == null) return const Scaffold(
+        body: Center(child: Text('角色不存在')));
+      final relatedCount = controller.data.characters.where(
+        (other) => controller.areFriends(c.id, other.id)).length;
+      final momentsCount = controller.data.moments.where(
+        (moment) => moment.characterId == c.id).length;
+      final model = controller.profile(c.apiProfileId);
+      return Scaffold(
+        backgroundColor: Theme.of(context).colorScheme.surfaceContainerLow,
+        appBar: AppBar(title: const Text('好友资料')),
+        body: ListView(padding: const EdgeInsets.fromLTRB(14, 18, 14, 26),
+          children: [
+            Container(padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surface,
+                borderRadius: BorderRadius.circular(17)),
+              child: Row(children: [
+                CharacterAvatar(character: c, local: controller.local,
+                  radius: 35),
+                const SizedBox(width: 16),
+                Expanded(child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(c.name, style: const TextStyle(fontSize: 23,
+                    fontWeight: FontWeight.w600), maxLines: 1,
+                    overflow: TextOverflow.ellipsis),
+                  const SizedBox(height: 5),
+                  Text(c.intro.isEmpty ? '还没有填写个人介绍' : c.intro,
+                    style: Theme.of(context).textTheme.bodySmall,
+                    maxLines: 2, overflow: TextOverflow.ellipsis),
+                ])),
+              ])),
+            const SizedBox(height: 16),
+            Card(margin: EdgeInsets.zero,
+              clipBehavior: Clip.antiAlias,
+              child: Column(children: [
+                _section(context, Icons.badge_outlined, '个人信息',
+                  '昵称、头像、介绍和人格文件',
+                  () => _open(context, CharacterBasicInfoScreen(
+                    controller: controller, characterId: c.id))),
+                const Divider(height: 1, indent: 57),
+                _section(context, Icons.hub_outlined, '模型绑定',
+                  model == null ? '未绑定模型' : '${model.label} · ${model.modelId}',
+                  () => _open(context, CharacterModelBindingScreen(
+                    controller: controller, characterId: c.id))),
+                const Divider(height: 1, indent: 57),
+                _section(context, Icons.people_outline, '添加好友关系',
+                  '已关联 $relatedCount 位 AI 好友',
+                  () => _open(context, CharacterFriendshipsScreen(
+                    controller: controller, characterId: c.id))),
+                const Divider(height: 1, indent: 57),
+                _section(context, Icons.camera_alt_outlined, '朋友圈',
+                  '$momentsCount 条动态 · 管理权限与查看朋友圈',
+                  () => _open(context, CharacterMomentsScreen(
+                    controller: controller, characterId: c.id))),
+                const Divider(height: 1, indent: 57),
+                _section(context, Icons.wallpaper_outlined, '聊天背景',
+                  c.chatBackgroundPath.isEmpty ? '使用默认背景' : '已设置专属图片',
+                  () => _open(context, CharacterChatBackgroundScreen(
+                    controller: controller, characterId: c.id))),
+              ])),
+            const SizedBox(height: 24),
+            FilledButton.icon(
+              onPressed: () => _open(context, ChatScreen(
+                controller: controller, friend: c)),
+              icon: const Icon(Icons.chat_bubble_outline),
+              label: const Text('发消息')),
+          ]),
+      );
+    });
+
+  Widget _section(BuildContext context, IconData icon, String title,
+      String subtitle, VoidCallback onTap) => ListTile(
+    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 3),
+    leading: Icon(icon, size: 22), title: Text(title),
+    subtitle: Text(subtitle, maxLines: 1, overflow: TextOverflow.ellipsis),
+    trailing: const Icon(Icons.chevron_right_rounded, size: 19),
+    onTap: onTap,
+  );
+}
+
+class CharacterBasicInfoScreen extends StatefulWidget {
+  final AppController controller;
+  final String characterId;
+  const CharacterBasicInfoScreen({super.key, required this.controller,
+    required this.characterId});
+  @override
+  State<CharacterBasicInfoScreen> createState() => _CharacterBasicInfoScreenState();
+}
+
+class _CharacterBasicInfoScreenState extends State<CharacterBasicInfoScreen> {
+  late final TextEditingController _name;
+  late final TextEditingController _intro;
+  late String _persona;
+  late String _avatarPath;
+  bool _choosing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final c = widget.controller.character(widget.characterId)!;
+    _name = TextEditingController(text: c.name);
+    _intro = TextEditingController(text: c.intro);
+    _persona = c.persona;
+    _avatarPath = c.avatarPath;
+  }
+
+  @override
+  void dispose() { _name.dispose(); _intro.dispose(); super.dispose(); }
+
+  Future<void> _chooseAvatar() async {
+    if (_choosing) return;
+    setState(() => _choosing = true);
+    try {
+      final file = await FilePicker.pickFile(type: FileType.image);
+      if (file == null) return;
+      if (await file.length() > 8 * 1024 * 1024) {
+        throw const FormatException('头像不能超过 8MB');
+      }
+      final path = await widget.controller.local.copyIntoApp(file, 'avatars');
+      if (mounted) setState(() => _avatarPath = path);
+    } catch (e) { if (mounted) uiError(context, e); }
+    finally { if (mounted) setState(() => _choosing = false); }
+  }
+
+  Future<void> _editPersona() async {
+    final text = TextEditingController(text: _persona);
+    try {
+      final next = await Navigator.push<String>(context,
+        MaterialPageRoute(builder: (ctx) => Scaffold(
+          appBar: AppBar(title: const Text('人格文件'), actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, text.text),
+              child: const Text('完成')),
+          ]),
+          body: SafeArea(child: Padding(padding: const EdgeInsets.all(16),
+            child: Column(children: [
+              const Text('人格和剧情文本只在此处编辑，好友资料首页不会直接展示全文。'),
+              const SizedBox(height: 10),
+              OutlinedButton.icon(
+                onPressed: () async {
+                  try {
+                    final imported = await PersonaFileReader.pickAndRead();
+                    if (imported != null) text.text = imported;
+                  } catch (e) { if (ctx.mounted) uiError(ctx, e); }
+                },
+                icon: const Icon(Icons.upload_file_outlined),
+                label: const Text('重新导入 TXT / MD / JSON / DOCX')),
+              const SizedBox(height: 10),
+              Expanded(child: TextField(controller: text, expands: true,
+                minLines: null, maxLines: null,
+                textAlignVertical: TextAlignVertical.top,
+                decoration: const InputDecoration(
+                  border: OutlineInputBorder(), hintText: '角色与剧情设定'))),
+            ]))))));
+      if (mounted && next != null) setState(() => _persona = next);
+    } finally { text.dispose(); }
+  }
+
+  void _save() {
+    if (_name.text.trim().isEmpty || _persona.trim().isEmpty) {
+      uiError(context, '昵称和人格文件不能留空'); return;
+    }
+    widget.controller.updateCharacterIntro(widget.characterId,
+      name: _name.text, intro: _intro.text,
+      persona: _persona, avatarPath: _avatarPath);
+    Navigator.pop(context);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.controller.character(widget.characterId);
+    if (c == null) return const Scaffold(body: Center(child: Text('角色不存在')));
+    final img = _avatarPath.isEmpty ? null :
+      widget.controller.local.resolve(_avatarPath);
+    return Scaffold(appBar: AppBar(title: const Text('个人信息')),
+      body: ListView(padding: const EdgeInsets.all(18), children: [
+        Center(child: Column(children: [
+          ClipOval(child: img != null && img.existsSync()
+            ? Image.file(img, width: 78, height: 78, fit: BoxFit.cover)
+            : CircleAvatar(radius: 39, backgroundColor: Color(c.avatarColor),
+                child: const Icon(Icons.person, color: Colors.white, size: 36))),
+          const SizedBox(height: 9),
+          TextButton.icon(onPressed: _choosing ? null : _chooseAvatar,
+            icon: const Icon(Icons.photo_camera_outlined),
+            label: const Text('更换头像')),
+        ])),
+        const SizedBox(height: 15),
+        TextField(controller: _name, maxLength: 40,
+          decoration: const InputDecoration(labelText: '昵称',
+            border: OutlineInputBorder())),
+        const SizedBox(height: 13),
+        TextField(controller: _intro, maxLength: 160, minLines: 2, maxLines: 4,
+          decoration: const InputDecoration(labelText: '个人介绍',
+            hintText: '一句简短的角色介绍', border: OutlineInputBorder())),
+        const SizedBox(height: 13),
+        ListTile(contentPadding: EdgeInsets.zero,
+          leading: const Icon(Icons.description_outlined),
+          title: const Text('人格与剧情文件'),
+          subtitle: Text('已保存 ${_persona.length} 个字符，点击单独编辑'),
+          trailing: const Icon(Icons.chevron_right), onTap: _editPersona),
+        const SizedBox(height: 22),
+        FilledButton(onPressed: _save, child: const Text('保存个人信息')),
+      ]));
+  }
+}
+
+class CharacterModelBindingScreen extends StatelessWidget {
+  final AppController controller;
+  final String characterId;
+  const CharacterModelBindingScreen({super.key, required this.controller,
+    required this.characterId});
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: controller, builder: (context, _) {
       final c = controller.character(characterId);
       if (c == null) return const Scaffold(body: Center(child: Text('角色不存在')));
-      return Scaffold(appBar: AppBar(title: Text(c.name)),
+      return Scaffold(appBar: AppBar(title: const Text('模型绑定')),
         body: ListView(children: [
-          const SizedBox(height: 20), Center(child: CharacterAvatar(character: c, local: controller.local, radius: 45)),
-          Padding(padding: const EdgeInsets.all(22), child: Text(c.persona.isEmpty ?
-            '还未填写人格内容' : c.persona,
-            maxLines: 8, overflow: TextOverflow.ellipsis)),
-          ListTile(leading: const Icon(Icons.hub_outlined),
-            title: const Text('绑定模型'),
-            subtitle: Text(controller.profile(c.apiProfileId)?.label ?? '尚未绑定')),
-          SwitchListTile(title: const Text('允许 AI 发布朋友圈'),
-            subtitle: const Text('默认关闭；仅在你手动点击生成时产生内容'),
-            value: c.allowMoments,
-            onChanged: (value) => controller.allowMoments(c.id, value)),
-          SwitchListTile(title: const Text('允许参与朋友圈互动'),
-            subtitle: const Text('独立授权：允许模型点赞、评论和回复；默认关闭'),
-            value: c.allowSocialInteractions,
-            onChanged: (value) => controller.setSocialPermission(c.id, value)),
+          const ListTile(title: Text('这个好友使用哪个模型？'),
+            subtitle: Text('修改绑定不会删除原有人格和聊天记录。')),
+          RadioListTile<String>(title: const Text('暂不绑定'),
+            value: '', groupValue: c.apiProfileId ?? '',
+            onChanged: (_) => controller.bindCharacterModel(c.id, null)),
+          ...controller.data.profiles.map((p) => RadioListTile<String>(
+            title: Text(p.label), subtitle: Text(p.modelId),
+            value: p.id, groupValue: c.apiProfileId ?? '',
+            onChanged: (_) => controller.bindCharacterModel(c.id, p.id))),
           const Divider(),
-          const ListTile(title: Text('AI 好友关系'),
-            subtitle: Text('只有互相设置为好友的 AI 才能看见彼此的虚拟动态并参与互动。')),
-          ...controller.data.characters.where((other) => other.id != c.id).map((other) =>
-            SwitchListTile(title: Text(other.name),
-              secondary: CharacterAvatar(character: other, local: controller.local, radius: 18),
+          ListTile(leading: const Icon(Icons.add_circle_outline),
+            title: const Text('添加新的 API 连接'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.push(context, MaterialPageRoute(
+              builder: (_) => ApiProfileEditorScreen(controller: controller)))),
+        ]));
+    });
+}
+
+class CharacterFriendshipsScreen extends StatelessWidget {
+  final AppController controller;
+  final String characterId;
+  const CharacterFriendshipsScreen({super.key, required this.controller,
+    required this.characterId});
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: controller, builder: (context, _) {
+      final c = controller.character(characterId);
+      if (c == null) return const Scaffold(body: Center(child: Text('角色不存在')));
+      return Scaffold(appBar: AppBar(title: const Text('AI 好友关系')),
+        body: ListView(children: [
+          const ListTile(title: Text('相互认识的角色'),
+            subtitle: Text('建立双向好友关系后，角色才能看到对方允许公开的虚拟朋友圈。')),
+          ...controller.data.characters.where((o) => o.id != c.id).map((other) =>
+            SwitchListTile(
+              secondary: CharacterAvatar(character: other,
+                local: controller.local, radius: 19),
+              title: Text(other.name),
               value: controller.areFriends(c.id, other.id),
               onChanged: (v) => controller.setFriendship(c.id, other.id, v))),
-          Padding(padding: const EdgeInsets.all(16), child: Column(children: [
-            FilledButton.icon(onPressed: () => Navigator.push(context,
-              MaterialPageRoute(builder: (_) => ChatScreen(controller: controller, friend: c))),
-              icon: const Icon(Icons.chat_outlined), label: const Text('发消息')),
-            const SizedBox(height: 8),
-            OutlinedButton.icon(onPressed: () => Navigator.push(context,
-              MaterialPageRoute(builder: (_) => CharacterEditorScreen(controller: controller, initial: c))),
-              icon: const Icon(Icons.edit_outlined), label: const Text('编辑角色 / 上传人格')),
-          ])),
+          if (controller.data.characters.length < 2)
+            const ListTile(title: Text('还没有其他角色可以建立关系')),
+        ]));
+    });
+}
+
+class CharacterMomentsScreen extends StatelessWidget {
+  final AppController controller;
+  final String characterId;
+  const CharacterMomentsScreen({super.key, required this.controller,
+    required this.characterId});
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: controller, builder: (context, _) {
+      final c = controller.character(characterId);
+      if (c == null) return const Scaffold(body: Center(child: Text('角色不存在')));
+      final entries = controller.data.moments.where((m) =>
+        m.characterId == c.id).toList().reversed.toList();
+      return Scaffold(appBar: AppBar(title: const Text('朋友圈')),
+        body: ListView(children: [
+          SwitchListTile(title: const Text('允许发布朋友圈'),
+            subtitle: const Text('默认关闭；需要手动触发生成'),
+            value: c.allowMoments,
+            onChanged: (v) => controller.allowMoments(c.id, v)),
+          SwitchListTile(title: const Text('允许点赞、评论与回复'),
+            subtitle: const Text('默认关闭；仅按已授权的好友关系互动'),
+            value: c.allowSocialInteractions,
+            onChanged: (v) => controller.setSocialPermission(c.id, v)),
+          const Divider(),
+          ListTile(title: const Text('这个角色的动态'),
+            subtitle: Text('共 ${entries.length} 条')),
+          if (entries.isEmpty)
+            const ListTile(title: Text('还没有发布过动态')),
+          ...entries.map((m) => ListTile(
+            title: Text(m.text, maxLines: 3, overflow: TextOverflow.ellipsis),
+            subtitle: Text('${m.createdAt.year}-${m.createdAt.month}-${m.createdAt.day} · '
+              '${m.likedBy.length} 赞 · ${m.comments.length} 评论'),
+            onTap: () => Navigator.push(context, MaterialPageRoute(
+              builder: (_) => Scaffold(
+                appBar: AppBar(title: Text('${c.name}的朋友圈')),
+                body: MomentsTab(controller: controller)))))),
+          const Divider(),
+          ListTile(leading: const Icon(Icons.camera_alt_outlined),
+            title: const Text('打开朋友圈互动页面'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.push(context, MaterialPageRoute(
+              builder: (_) => Scaffold(appBar: AppBar(title: const Text('朋友圈')),
+                body: MomentsTab(controller: controller))))),
+        ]));
+    });
+}
+
+class CharacterChatBackgroundScreen extends StatelessWidget {
+  final AppController controller;
+  final String characterId;
+  const CharacterChatBackgroundScreen({super.key, required this.controller,
+    required this.characterId});
+
+  Future<void> _pick(BuildContext context) async {
+    try {
+      final image = await FilePicker.pickFile(type: FileType.image);
+      if (image == null) return;
+      if (await image.length() > 12 * 1024 * 1024) {
+        throw const FormatException('聊天背景不能超过 12MB');
+      }
+      final relative = await controller.local.copyIntoApp(image, 'chat_backgrounds');
+      controller.setCharacterBackground(characterId, relative);
+      if (context.mounted) uiError(context, '已保存这个好友的专属聊天背景');
+    } catch (e) { if (context.mounted) uiError(context, e); }
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: controller, builder: (context, _) {
+      final c = controller.character(characterId);
+      if (c == null) return const Scaffold(body: Center(child: Text('角色不存在')));
+      final image = c.chatBackgroundPath.isNotEmpty ?
+        controller.local.resolve(c.chatBackgroundPath) : null;
+      return Scaffold(appBar: AppBar(title: const Text('聊天背景')),
+        body: ListView(padding: const EdgeInsets.all(16), children: [
+          ClipRRect(borderRadius: BorderRadius.circular(15),
+            child: Container(height: 260,
+              color: Theme.of(context).colorScheme.surfaceContainerLow,
+              child: image != null && image.existsSync()
+                ? Image.file(image, fit: BoxFit.cover)
+                : const Center(child: Text('默认聊天背景')))),
+          const SizedBox(height: 18),
+          FilledButton.icon(onPressed: () => _pick(context),
+            icon: const Icon(Icons.photo_library_outlined),
+            label: const Text('从手机选择图片')),
+          if (c.chatBackgroundPath.isNotEmpty)
+            TextButton(onPressed: () => controller.setCharacterBackground(c.id, ''),
+              child: const Text('恢复默认背景')),
+          const SizedBox(height: 15),
+          const Text('只修改与当前角色的私聊背景，不会更换虚拟手机壁纸，'
+            '也不会影响其他 AI 好友。'),
         ]));
     });
 }
@@ -430,8 +757,11 @@ class _CharacterEditorScreenState extends State<CharacterEditorScreen> {
       name: _name.text.trim(), persona: _persona.text.trim(),
       apiProfileId: _boundProfile.isEmpty ? null : _boundProfile,
       allowMoments: _canPost, allowSocialInteractions: _canInteract,
+      allowProactiveMessages: widget.initial?.allowProactiveMessages ?? false,
       friendIds: widget.initial?.friendIds ?? const [], avatarColor: _avatarColor,
-      avatarPath: _avatarPath);
+      avatarPath: _avatarPath,
+      intro: widget.initial?.intro ?? '',
+      chatBackgroundPath: widget.initial?.chatBackgroundPath ?? '');
     widget.controller.upsertCharacter(c);
     Navigator.pop(context);
   }
