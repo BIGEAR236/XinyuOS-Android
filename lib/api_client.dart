@@ -221,7 +221,10 @@ $setting
           merged.last.imageBase64 == null && turn.imageBase64 == null) {
         merged[merged.length - 1] = ModelTurn(role, '${merged.last.text}\n${turn.text}');
       } else {
-        merged.add(ModelTurn(role, turn.text));
+        // Preserve the image attached to the current turn. Dropping these
+        // fields silently converts a vision request into text-only input.
+        merged.add(ModelTurn(role, turn.text,
+          imageBase64: turn.imageBase64, imageMime: turn.imageMime));
       }
     }
     return merged;
