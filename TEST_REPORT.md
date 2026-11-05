@@ -1,33 +1,34 @@
-# 心屿 OS V3 — 交付测试记录
+# 心屿 OS V3.3 检查状态
 
-日期：2026-11-04
+本次由 V3.2 工程升级，**交付的是待编译 Flutter 源码**，不是已经编译或真机验收的 APK。
 
-## 已实际完成（本环境）
+## 已完成的静态检查
 
-- 检查 `pubspec.yaml` 文件有效性、核心依赖声明、Dart 文件的相对引用与模块结构：通过。
-- 检查所有 Dart 源码和测试文件的括号成对结构（忽略字符串与注释）：通过。
-- 代码静态安全断言：API Key 与普通 JSON 分离、HTTPS URL 校验、禁止 3xx 自动跟随、角色朋友圈默认未授权、群聊轮次上限：通过。
-- 用生成的示例 Android / iOS 宿主文件测试 `prepare_platforms.py`：Android INTERNET、禁用明文传输/备份、iOS 最低版本和名字补丁均成功写入。
-- 已提供 Flutter 测试用例，覆盖六类配置、五类模型回复解析、请求结构、拒绝 HTTP、默认权限、本地 JSON 往返。
+- 12 个 lib/*.dart 源文件在括号/相对 import 层面通过静态检查。
+- 原有 `activation_service.dart`、`ui_activation.dart`、`tools/configure_release_signing.py` 未改动；签名验证和本地文件路径保留。
+- API Key 依然仅通过 flutter_secure_storage 保存，未写进 AppData JSON。
+- 新增 `ApiProfile.apiProtocol`，旧用户从 JSON 导入时默认 chat；提供自定义中转站 `/models` 列表、Chat Completions / Responses 两种请求格式的代码与单元测试。
+- 新增 `Character.allowSocialInteractions`、`friendIds`，默认无授权和好友关系；只对双向关系的 AI 展示/互动模拟朋友圈。
+- 新增 MomentEntry.likedBy、MomentComment 及 parentId；兼容之前没有这些字段的存储数据。
+- 新增点赞、评论、定向 AI 回复、手动邀请好友互动，以及前台一小时节流自动邀请的 UI 与 controller 代码。
+- 新增消息编辑、最后一次私聊回复重生成、聊天气泡透明度/颜色/时间设置。
+- 增加 test/moments_contract_test.dart，并在 GitHub Actions 编译流程中纳入测试。
+- 公开工程中不包含 APK 签名私钥或管理员激活码签发私钥。
 
-## 尚未执行（必须在开发机或 CI 上完成）
+## 尚未完成、需要你运行 GitHub Actions 及真机测试的事项
 
-- `flutter pub get`：制作环境没有 Flutter SDK 和下载网络。
-- `flutter analyze`：未运行 Dart 编译器；不能确认所有代码完全通过分析。
-- `flutter test`：测试用例已写入但未实际执行。
-- 真实 Android APK 构建、安卓手机安装和本机 API 调用测试：未执行。
-- iOS 模拟器编译、iPhone 真机代码签名、iOS API 联调：未执行。
-- 商用级安全审计、iOS App Store / Google Play 审核：未执行。
+1. Flutter analyze / flutter test / flutter build apk --release **在此环境无法运行（没有 Flutter SDK）**。新代码可能仍有编译或插件兼容错误；应以 Actions 日志为准。
+2. 中转站 `/models`、`/chat/completions`、`/responses` 的真实协议和网络兼容性仍需用户自己的中转站与密钥验证。
+3. 真机验证角色头像、桌面图标、音乐切换页面持续播放、消息编辑/重生成，以及前台自动朋友圈互动。
+4. 真机覆盖升级验证旧激活码、旧聊天数据与旧 API Key 持久可用。
+5. 「返回主界面后图标变成纯文字」缺少 App 画面和重现步骤，本次未确认根因。
 
-## 后续优先验收路线
+### 建议最先测试的朋友圈情景
 
-1. 在构建机完成 `flutter pub get`、`flutter analyze`、`flutter test`。
-2. Android 用 `flutter build apk --debug` 安装一台真实手机；iOS 在 Mac 上通过 Xcode 安装到真机。
-3. 用自己的一个正常计费的 API Key 完成“测试连接 → 保存 → 绑定小满 → 私聊返回正文”。
-4. 测试错误密钥、无额度、网络断开、不同模型 ID 的错误提示。
-5. 群聊至少两位 AI，验证按序回复且不会无限循环。
-6. 朋友圈在默认关闭的情况下不能生成；用户打开后可手动生成。
-7. 杀掉 App 再重新打开，验证联系人、聊天记录、壁纸、音乐和主题设置持久化。
-8. 用文件应用导入 TXT / MD / JSON / DOCX，检查中文文本无乱码。
-
-结论：这是**可用于跨平台开发和编译验证的源代码交付**，不是已通过双平台真机验收的正式 App。不要拿静态检查替代 APK/IPA 真实安装测试。
+- 创建 A、B、C 三个角色，都配置有效 API；A 允许发朋友圈，A/B/C 都手动允许互动。
+- 分别把 B 和 C 设为 A 的好友；用 A 发布动态。
+- 你点赞、评论；点击该评论右边的小机器人：检查 A 与 B 能否回复且每人只回复一次。
+- 点击「好友互动」：检查 B/C 由模型选择点赞或评论。
+- 再对 B 的评论点回复，并邀请 AI 回复：检查其他角色可对 B 的评论再回复。
+- 关闭所有互动权限，检查不会再发起社交模型请求。
+- 彻底退出 App 再打开，验证点赞、评论、好友关系都仍然存在。

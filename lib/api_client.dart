@@ -57,6 +57,7 @@ $setting
 
   static bool _isClaude(String provider) => provider == 'anthropic';
   static bool _isGemini(String provider) => provider == 'gemini';
+  static bool _isResponses(String provider) => provider == 'responses';
 
   static Uri _endpoint(ApiProfile profile) {
     final base = profile.baseUrl.trim().replaceAll(RegExp(r'/+$'), '');
@@ -68,6 +69,13 @@ $setting
     }
     if (profile.modelId.trim().isEmpty) throw ApiCallFailure('模型 ID 不能为空。');
     final lower = uri.path.toLowerCase();
+    if (profile.provider == 'custom' && profile.apiProtocol == 'responses') {
+      if (lower.endsWith('/responses')) return uri;
+      if (lower.endsWith('/chat/completions')) {
+        return Uri.parse('${base.substring(0, base.length - '/chat/completions'.length)}/responses');
+      }
+      return Uri.parse('$base/responses');
+    }
     if (_isClaude(profile.provider)) {
       if (lower.endsWith('/messages')) return uri;
       return Uri.parse('$base/messages');
@@ -91,6 +99,91 @@ $setting
   }
 
   static Uri previewEndpoint(ApiProfile profile) => _endpoint(profile);
+
+  /// GET /models where supported. A relay may reject it; the user can still
+  /// type an exact model ID in the API editor.
+  static Uri modelListEndpoint(ApiProfile profile) {
+    // Listing models should not require that the user already knows a model ID.
+    final lookupProfile = ApiProfile(id: profile.id, label: profile.label,
+      provider: profile.provider, baseUrl: profile.baseUrl,
+      modelId: profile.modelId.trim().isEmpty ? '_list' : profile.modelId,
+      anthropicVersion: profile.anthropicVersion,
+      workspaceId: profile.workspaceId, streaming: false,
+      authMode: profile.authMode, apiProtocol: profile.apiProtocol);
+    final endpoint = _endpoint(lookupProfile);
+    final base = endpoint.toString();
+    final lower = endpoint.path.toLowerCase();
+    if (profile.provider == 'gemini') {
+      return Uri.parse('${profile.baseUrl.trim().replaceAll(RegExp(r'/+$'), '')}/models?pageSize=1000');
+    }
+    if (lower.endsWith('/chat/completions')) {
+      return Uri.parse('${base.substring(0, base.length - '/chat/completions'.length)}/models');
+    }
+    if (lower.endsWith('/responses')) {
+      return Uri.parse('${base.substring(0, base.length - '/responses'.length)}/models');
+    }
+    if (lower.endsWith('/messages')) {
+      return Uri.parse('${base.substring(0, base.length - '/messages'.length)}/models');
+    }
+    return Uri.parse('$base/models');
+  }
+
+  static List<String> parseModelList(String body) {
+    final root = mapJson(jsonDecode(body));
+    final items = root['data'] ?? root['models'] ?? mapJson(root['result'])['data'];
+    if (items is! List) throw ApiCallFailure('服务商没有返回标准的模型列表，请手动填写模型 ID。');
+    final ids = <String>{};
+    for (final item in items) {
+      if (item is String && item.trim().isNotEmpty) { ids.add(item.trim()); continue; }
+      if (item is! Map) continue;
+      final m = mapJson(item);
+      final raw = '${m['id'] ?? m['name'] ?? m['model'] ?? ''}'.trim();
+      if (raw.isEmpty) continue;
+      ids.add(raw.startsWith('models/') ? raw.substring('models/'.length) : raw);
+    }
+    return ids.toList()..sort();
+  }
+
+  static Future<List<String>> listModels({required http.Client client,
+    required ApiProfile profile, required String apiKey}) async {
+    if (apiKey.trim().isEmpty) throw ApiCallFailure('请先填写 API Key。');
+    final uri = modelListEndpoint(profile);
+    final headers = <String, String>{'accept': 'application/json'};
+    if (_isClaude(profile.provider)) {
+      headers['x-api-key'] = apiKey.trim();
+      headers['anthropic-version'] = profile.anthropicVersion;
+    } else if (_isGemini(profile.provider)) {
+      headers['x-goog-api-key'] = apiKey.trim();
+    } else if (profile.provider == 'custom' && profile.authMode == 'x-api-key') {
+      headers['x-api-key'] = apiKey.trim();
+    } else {
+      headers['Authorization'] = 'Bearer ${apiKey.trim()}';
+    }
+    try {
+      final req = http.Request('GET', uri)
+        ..followRedirects = false
+        ..headers.addAll(headers);
+      final res = await client.send(req).timeout(_connectTimeout);
+      final response = await http.Response.fromStream(res).timeout(_receiveTimeout);
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        if (response.statusCode == 404 || response.statusCode == 405) {
+          throw ApiCallFailure('模型列表接口 /models 返回 HTTP ${response.statusCode}。'
+            '该中转站可能不提供列出模型服务；仍可手动填写模型 ID。',
+            response.statusCode);
+        }
+        throw ApiCallFailure(_readError(response.statusCode, response.body, apiKey), response.statusCode);
+      }
+      final models = parseModelList(response.body);
+      if (models.isEmpty) throw ApiCallFailure('模型列表为空；可能需要手动输入模型名称。');
+      return models;
+    } on ApiCallFailure catch (e) {
+      throw ApiCallFailure(e.message.replaceAll(apiKey, '[密钥已隐藏]'), e.statusCode);
+    } on TimeoutException {
+      throw ApiCallFailure('获取模型列表超时，可以手动填写模型 ID。');
+    } catch (e) {
+      throw ApiCallFailure('无法获取模型列表：${'$e'.replaceAll(apiKey, '[密钥已隐藏]')}');
+    }
+  }
 
   static List<ModelTurn> _mergedTurns(List<ModelTurn> turns) {
     final merged = <ModelTurn>[];
@@ -146,14 +239,22 @@ $setting
       } else {
         headers['Authorization'] = 'Bearer ${apiKey.trim()}';
       }
-      payload.addAll({
+      if (profile.provider == 'custom' && profile.apiProtocol == 'responses') {
+        payload.addAll({
+          'model': profile.modelId.trim(),
+          'instructions': system,
+          'input': messages.map((m) => {'role': m.role, 'content': m.text}).toList(),
+          'stream': profile.streaming,
+          'max_output_tokens': 512,
+        });
+      } else { payload.addAll({
         'model': profile.modelId.trim(),
         'messages': [
           {'role': 'system', 'content': system},
           ...messages.map((m) => {'role': m.role, 'content': m.text}),
         ],
         'stream': profile.streaming,
-      });
+      }); }
     }
     return BuiltApiRequest(uri, headers, payload);
   }
@@ -171,7 +272,14 @@ $setting
     if (decoded is! Map) throw ApiCallFailure('模型响应不是 JSON 对象。');
     final root = mapJson(decoded);
     String text = '';
-    if (_isClaude(provider)) {
+    if (_isResponses(provider)) {
+      text = '${root['output_text'] ?? ''}';
+      if (text.isEmpty && root['output'] is List) {
+        final outputs = (root['output'] as List).whereType<Map>();
+        text = outputs.map((m) => _extractText(mapJson(m)['content'])).
+          where((t) => t.isNotEmpty).join('\n');
+      }
+    } else if (_isClaude(provider)) {
       text = _extractText(root['content']);
     } else if (_isGemini(provider)) {
       final candidates = root['candidates'];
@@ -223,6 +331,11 @@ $setting
       final err = event['error'];
       final msg = err is Map ? '${err['message'] ?? err}' : '$err';
       throw ApiCallFailure('服务商流式返回错误：$msg');
+    }
+    if (_isResponses(provider)) {
+      if (event['type'] == 'response.output_text.delta') return '${event['delta'] ?? ''}';
+      if (event['type'] == 'response.failed') throw ApiCallFailure('Responses API 返回失败');
+      return null;
     }
     if (_isClaude(provider)) {
       if (event['type'] == 'error') {
@@ -325,6 +438,8 @@ $setting
     void Function(String)? onText}) async {
     final request = buildRequest(profile: profile, apiKey: apiKey,
       persona: persona, turns: turns, roleName: roleName, group: group);
+    final parseFormat = profile.provider == 'custom' && profile.apiProtocol == 'responses'
+      ? 'responses' : profile.provider;
     final req = http.Request('POST', request.uri)
       ..followRedirects = false
       ..headers.addAll(request.headers)
@@ -337,13 +452,13 @@ $setting
       }
       final contentType = streamed.headers['content-type']?.toLowerCase() ?? '';
       if (contentType.contains('text/event-stream')) {
-        return await _streamResponse(profile.provider, streamed.stream, onText: onText);
+        return await _streamResponse(parseFormat, streamed.stream, onText: onText);
       }
       final response = await http.Response.fromStream(streamed).timeout(_receiveTimeout);
       if (response.body.trimLeft().startsWith('data:')) {
-        return parseSseText(profile.provider, response.body, onText: onText);
+        return parseSseText(parseFormat, response.body, onText: onText);
       }
-      final text = parseResponse(profile.provider, response.body);
+      final text = parseResponse(parseFormat, response.body);
       onText?.call(text);
       return text;
     } on ApiCallFailure catch (failure) {

@@ -39,9 +39,11 @@ class ApiProfile {
   String workspaceId;
   bool streaming;
   String authMode; // bearer / x-api-key (custom relays only)
+  String apiProtocol; // chat / responses; custom relay only
   ApiProfile({required this.id, required this.label, required this.provider,
     required this.baseUrl, required this.modelId, this.anthropicVersion = '2026-10-21',
-    this.workspaceId = '', this.streaming = true, this.authMode = 'bearer'});
+    this.workspaceId = '', this.streaming = true, this.authMode = 'bearer',
+    this.apiProtocol = 'chat'});
   factory ApiProfile.fromJson(Map<String, dynamic> j) => ApiProfile(
     id: '${j['id'] ?? newId()}', label: '${j['label'] ?? ''}',
     provider: '${j['provider'] ?? 'custom'}',
@@ -49,11 +51,13 @@ class ApiProfile {
     anthropicVersion: '${j['anthropicVersion'] ?? '2026-10-21'}',
     workspaceId: '${j['workspaceId'] ?? ''}',
     streaming: j['streaming'] != false,
-    authMode: '${j['authMode'] ?? 'bearer'}');
+    authMode: '${j['authMode'] ?? 'bearer'}',
+    apiProtocol: '${j['apiProtocol'] ?? 'chat'}');
   Map<String, dynamic> toJson() => {'id': id, 'label': label,
     'provider': provider, 'baseUrl': baseUrl, 'modelId': modelId,
     'anthropicVersion': anthropicVersion, 'workspaceId': workspaceId,
-    'streaming': streaming, 'authMode': authMode}; // API Key NEVER written here.
+    'streaming': streaming, 'authMode': authMode,
+    'apiProtocol': apiProtocol}; // API Key NEVER written here.
 }
 
 class Character {
@@ -62,19 +66,26 @@ class Character {
   String persona;
   String? apiProfileId;
   bool allowMoments;
+  bool allowSocialInteractions; // separately authorized; defaults OFF
+  List<String> friendIds; // reciprocal, local AI-to-AI friendships
   int avatarColor;
   String avatarPath; // app-private relative image path
   Character({required this.id, required this.name, required this.persona,
-    this.apiProfileId, this.allowMoments = false, this.avatarColor = 0xFFB67BB8,
+    this.apiProfileId, this.allowMoments = false,
+    this.allowSocialInteractions = false, this.friendIds = const [],
+    this.avatarColor = 0xFFB67BB8,
     this.avatarPath = ''});
   factory Character.fromJson(Map<String, dynamic> j) => Character(
     id: '${j['id'] ?? newId()}', name: '${j['name'] ?? '未命名'}',
     persona: '${j['persona'] ?? ''}', apiProfileId: j['apiProfileId'] as String?,
     allowMoments: j['allowMoments'] == true,
+    allowSocialInteractions: j['allowSocialInteractions'] == true,
+    friendIds: (j['friendIds'] as List? ?? []).map((v) => '$v').toList(),
     avatarColor: (j['avatarColor'] as num?)?.toInt() ?? 0xFFB67BB8,
     avatarPath: '${j['avatarPath'] ?? ''}');
   Map<String, dynamic> toJson() => {'id': id, 'name': name, 'persona': persona,
     'apiProfileId': apiProfileId, 'allowMoments': allowMoments,
+    'allowSocialInteractions': allowSocialInteractions, 'friendIds': friendIds,
     'avatarColor': avatarColor, 'avatarPath': avatarPath};
 }
 
@@ -109,19 +120,40 @@ class ChatEntry {
     'senderId': senderId, 'text': text, 'createdAt': createdAt.toIso8601String()};
 }
 
+class MomentComment {
+  String id;
+  String authorId; // 'me' or a Character ID
+  String text;
+  String? parentId; // optional reply-to; referential id within the same moment
+  DateTime createdAt;
+  MomentComment({required this.id, required this.authorId,
+    required this.text, required this.createdAt, this.parentId});
+  factory MomentComment.fromJson(Map<String, dynamic> j) => MomentComment(
+    id: '${j['id'] ?? newId()}', authorId: '${j['authorId'] ?? 'me'}',
+    text: '${j['text'] ?? ''}', parentId: j['parentId'] as String?,
+    createdAt: DateTime.tryParse('${j['createdAt'] ?? ''}') ?? DateTime.now());
+  Map<String, dynamic> toJson() => {'id': id, 'authorId': authorId,
+    'text': text, 'parentId': parentId, 'createdAt': createdAt.toIso8601String()};
+}
+
 class MomentEntry {
   String id;
   String characterId;
   String text;
   DateTime createdAt;
+  List<String> likedBy; // 'me' and Character IDs
+  List<MomentComment> comments;
   MomentEntry({required this.id, required this.characterId, required this.text,
-    required this.createdAt});
+    required this.createdAt, this.likedBy = const [], this.comments = const []});
   factory MomentEntry.fromJson(Map<String, dynamic> j) => MomentEntry(
     id: '${j['id'] ?? newId()}', characterId: '${j['characterId'] ?? ''}',
     text: '${j['text'] ?? ''}',
-    createdAt: DateTime.tryParse('${j['createdAt'] ?? ''}') ?? DateTime.now());
+    createdAt: DateTime.tryParse('${j['createdAt'] ?? ''}') ?? DateTime.now(),
+    likedBy: (j['likedBy'] as List? ?? []).map((v) => '$v').toList(),
+    comments: listJson(j['comments']).map(MomentComment.fromJson).toList());
   Map<String, dynamic> toJson() => {'id': id, 'characterId': characterId,
-    'text': text, 'createdAt': createdAt.toIso8601String()};
+    'text': text, 'createdAt': createdAt.toIso8601String(),
+    'likedBy': likedBy, 'comments': comments.map((c) => c.toJson()).toList()};
 }
 
 class LocalTrack {
@@ -148,10 +180,21 @@ class AppData {
   double fontScale;
   String wallpaperPath;
   Map<String, String> desktopIcons;
+  bool autoMomentReplies; // only for user comments; defaults OFF
+  bool autoMomentInteractions; // foreground only; defaults OFF
+  DateTime? lastAutoInteractionAt;
+  double chatBubbleOpacity;
+  int myBubbleColor;
+  int aiBubbleColor;
+  bool showChatTime;
   AppData({required this.profiles, required this.characters, required this.groups,
     required this.messages, required this.moments, required this.tracks,
     this.darkMode = false, this.themeColor = 0xFF8870B5, this.fontScale = 1,
-    this.wallpaperPath = '', this.desktopIcons = const {}});
+    this.wallpaperPath = '', this.desktopIcons = const {},
+    this.autoMomentReplies = false, this.autoMomentInteractions = false,
+    this.lastAutoInteractionAt, this.chatBubbleOpacity = 1.0,
+    this.myBubbleColor = 0xFFB8EC9C, this.aiBubbleColor = 0xFFFFFFFF,
+    this.showChatTime = false});
   factory AppData.initial() => AppData(
     profiles: [], characters: [
       Character(id: 'sample_xiaoman', name: '小满',
@@ -173,9 +216,16 @@ class AppData {
     themeColor: (j['themeColor'] as num?)?.toInt() ?? 0xFF8870B5,
     fontScale: (j['fontScale'] as num?)?.toDouble() ?? 1,
     wallpaperPath: '${j['wallpaperPath'] ?? ''}',
-    desktopIcons: mapJson(j['desktopIcons']).map((k, v) => MapEntry(k, '$v')));
+    desktopIcons: mapJson(j['desktopIcons']).map((k, v) => MapEntry(k, '$v')),
+    autoMomentReplies: j['autoMomentReplies'] == true,
+    autoMomentInteractions: j['autoMomentInteractions'] == true,
+    lastAutoInteractionAt: DateTime.tryParse('${j['lastAutoInteractionAt'] ?? ''}'),
+    chatBubbleOpacity: ((j['chatBubbleOpacity'] as num?)?.toDouble() ?? 1.0).clamp(.35, 1.0).toDouble(),
+    myBubbleColor: (j['myBubbleColor'] as num?)?.toInt() ?? 0xFFB8EC9C,
+    aiBubbleColor: (j['aiBubbleColor'] as num?)?.toInt() ?? 0xFFFFFFFF,
+    showChatTime: j['showChatTime'] == true);
   Map<String, dynamic> toJson() => {
-    'version': 3,
+    'version': 4,
     'profiles': profiles.map((v) => v.toJson()).toList(),
     'characters': characters.map((v) => v.toJson()).toList(),
     'groups': groups.map((v) => v.toJson()).toList(),
@@ -185,6 +235,12 @@ class AppData {
     'darkMode': darkMode, 'themeColor': themeColor,
     'fontScale': fontScale, 'wallpaperPath': wallpaperPath,
     'desktopIcons': desktopIcons,
+    'autoMomentReplies': autoMomentReplies,
+    'autoMomentInteractions': autoMomentInteractions,
+    'lastAutoInteractionAt': lastAutoInteractionAt?.toIso8601String(),
+    'chatBubbleOpacity': chatBubbleOpacity,
+    'myBubbleColor': myBubbleColor, 'aiBubbleColor': aiBubbleColor,
+    'showChatTime': showChatTime,
   };
   String serialize() => jsonEncode(toJson());
 }

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'app_controller.dart';
 import 'models.dart';
@@ -45,6 +46,67 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  Future<void> _regenerate() async {
+    final c = widget.friend == null ? null : widget.controller.character(widget.friend!.id);
+    if (c == null) return;
+    final err = await widget.controller.regeneratePrivate(c);
+    if (mounted && err != null) uiError(context, err);
+  }
+
+  Future<void> _edit(ChatEntry entry) async {
+    final text = TextEditingController(text: entry.text);
+    try {
+      final result = await showDialog<String>(context: context,
+        builder: (ctx) => AlertDialog(title: const Text('编辑消息'),
+          content: TextField(controller: text, autofocus: true,
+            minLines: 2, maxLines: 9,
+            decoration: const InputDecoration(border: OutlineInputBorder())),
+          actions: [TextButton(onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, text.text.trim()),
+              child: const Text('保存'))]));
+      if (!mounted || result == null || result.isEmpty || result == entry.text) return;
+      if (entry.senderId == 'me') {
+        final confirmed = await showDialog<bool>(context: context,
+          builder: (ctx) => AlertDialog(title: const Text('修改已发送消息'),
+            content: const Text('为保持对话上下文一致，编辑这条用户消息会删除它之后的回复。你可以重新生成。'),
+            actions: [TextButton(onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消')),
+              FilledButton(onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('确认编辑'))]));
+        if (confirmed != true) return;
+      }
+      widget.controller.editMessage(thread, entry.id, result);
+    } finally { text.dispose(); }
+  }
+
+  Future<void> _messageAction(ChatEntry entry) async {
+    if (widget.controller.busy.contains(thread)) return;
+    final choice = await showModalBottomSheet<String>(context: context,
+      showDragHandle: true, builder: (ctx) => SafeArea(child: Column(
+        mainAxisSize: MainAxisSize.min, children: [
+          ListTile(leading: const Icon(Icons.copy_all_outlined),
+            title: const Text('复制消息'),
+            onTap: () => Navigator.pop(ctx, 'copy')),
+          ListTile(leading: const Icon(Icons.edit_outlined),
+            title: const Text('编辑这条消息'),
+            onTap: () => Navigator.pop(ctx, 'edit')),
+          if (widget.friend != null && entry.senderId == widget.friend!.id)
+            ListTile(leading: const Icon(Icons.refresh),
+              title: const Text('重新生成最近一条回复'),
+              onTap: () => Navigator.pop(ctx, 'retry')),
+        ])));
+    if (!mounted) return;
+    if (choice == 'copy') {
+      await Clipboard.setData(ClipboardData(text: entry.text));
+      if (mounted) uiError(context, '已复制');
+    } else if (choice == 'edit') {
+      await _edit(entry);
+    } else if (choice == 'retry') {
+      await _regenerate();
+    }
+  }
+
   Future<void> _groupSettings() async {
     final group = widget.group;
     if (group == null) return;
@@ -85,6 +147,9 @@ class _ChatScreenState extends State<ChatScreen> {
         backgroundColor: scheme.surfaceContainerLow,
         appBar: AppBar(title: Text(title, style: const TextStyle(fontSize: 18)),
           actions: [
+            if (friend != null && !running) IconButton(
+              tooltip: '重新生成最近一条回复', onPressed: _regenerate,
+              icon: const Icon(Icons.refresh_outlined)),
             if (running) IconButton(tooltip: '停止生成', onPressed: () =>
               widget.controller.stop(thread), icon: const Icon(Icons.stop_circle_outlined)),
             if (group != null) IconButton(onPressed: _groupSettings,
@@ -120,7 +185,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 final shifted = index - (running ? 1 : 0);
                 final msg = messages[messages.length - shifted - 1];
                 return ChatBubble(entry: msg, controller: widget.controller,
-                  groupChat: group != null);
+                  groupChat: group != null, onAction: _messageAction);
               })),
           MiniPlayer(controller: widget.controller),
           SafeArea(top: false, child: Container(
@@ -150,8 +215,9 @@ class ChatBubble extends StatelessWidget {
   final AppController controller;
   final bool groupChat;
   final bool streaming;
+  final void Function(ChatEntry)? onAction;
   const ChatBubble({super.key, required this.entry, required this.controller,
-    this.groupChat = false, this.streaming = false});
+    this.groupChat = false, this.streaming = false, this.onAction});
 
   @override
   Widget build(BuildContext context) {
@@ -180,19 +246,30 @@ class ChatBubble extends StatelessWidget {
                 Padding(padding: const EdgeInsets.only(bottom: 3),
                   child: Text(controller.displayName(entry.senderId),
                     style: Theme.of(context).textTheme.labelSmall)),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                decoration: BoxDecoration(
-                  color: mine ? const Color(0xFFB8EC9C) : scheme.surface,
-                  borderRadius: BorderRadius.circular(9)),
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  SelectableText(entry.text,
-                    style: TextStyle(color: mine ? Colors.black87 : scheme.onSurface)),
-                  if (streaming) const Padding(
-                    padding: EdgeInsets.only(top: 3),
-                    child: SizedBox(width: 8, height: 8,
-                      child: CircularProgressIndicator(strokeWidth: 1.4))),
-                ])),
+              GestureDetector(
+                onLongPress: onAction == null ? null : () => onAction!(entry),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: Color(mine ? controller.data.myBubbleColor :
+                      controller.data.aiBubbleColor).withValues(
+                      alpha: controller.data.chatBubbleOpacity),
+                    borderRadius: BorderRadius.circular(9)),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(entry.text,
+                      style: TextStyle(color: ThemeData.estimateBrightnessForColor(
+                        Color(mine ? controller.data.myBubbleColor :
+                          controller.data.aiBubbleColor)) == Brightness.light
+                        ? Colors.black87 : Colors.white)),
+                    if (streaming) const Padding(
+                      padding: EdgeInsets.only(top: 3),
+                      child: SizedBox(width: 8, height: 8,
+                        child: CircularProgressIndicator(strokeWidth: 1.4))),
+                  ]))),
+              if (!streaming && controller.data.showChatTime)
+                Padding(padding: const EdgeInsets.only(top: 3),
+                  child: Text(clockTime(entry.createdAt),
+                    style: Theme.of(context).textTheme.labelSmall)),
             ])),
           if (mine) const SizedBox(width: 5),
         ]));

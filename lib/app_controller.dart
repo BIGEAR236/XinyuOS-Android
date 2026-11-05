@@ -91,6 +91,7 @@ class AppController extends ChangeNotifier {
       existing.workspaceId = p.workspaceId;
       existing.streaming = p.streaming;
       existing.authMode = p.authMode;
+      existing.apiProtocol = p.apiProtocol;
     }
     _changed();
   }
@@ -111,11 +112,221 @@ class AppController extends ChangeNotifier {
     _changed();
   }
 
+  void setSocialPermission(String id, bool value) {
+    final c = character(id);
+    if (c == null) return;
+    c.allowSocialInteractions = value;
+    _changed();
+  }
+
+  bool areFriends(String aId, String bId) {
+    if (aId == bId) return false;
+    final a = character(aId), b = character(bId);
+    return a != null && b != null &&
+      a.friendIds.contains(bId) && b.friendIds.contains(aId);
+  }
+
+  void setFriendship(String aId, String bId, bool connected) {
+    if (aId == bId) return;
+    final a = character(aId), b = character(bId);
+    if (a == null || b == null) return;
+    a.friendIds = {...a.friendIds, if (connected) bId}.toList()..removeWhere(
+      (id) => !connected && id == bId);
+    b.friendIds = {...b.friendIds, if (connected) aId}.toList()..removeWhere(
+      (id) => !connected && id == aId);
+    _changed();
+  }
+
+  void setAutoMomentReplies(bool enabled) {
+    data.autoMomentReplies = enabled;
+    _changed();
+  }
+
+  void setAutoMomentInteractions(bool enabled) {
+    data.autoMomentInteractions = enabled;
+    _changed();
+  }
+
+  /// Foreground-only, opt-in, max one post / two AI calls per 60 minutes.
+  /// Never schedules tasks or invokes itself from generated AI comments.
+  Future<String?> maybeAutoSocialSweep() async {
+    if (!data.autoMomentInteractions || data.moments.isEmpty) return null;
+    final now = DateTime.now();
+    final last = data.lastAutoInteractionAt;
+    if (last != null && now.difference(last) < const Duration(hours: 1)) return null;
+    MomentEntry? eligible;
+    for (final m in data.moments) {
+      if (socialAudience(m).any((c) => c.allowSocialInteractions &&
+          !m.likedBy.contains(c.id) &&
+          !m.comments.any((cm) => cm.authorId == c.id && cm.parentId == null))) {
+        eligible = m;
+        break;
+      }
+    }
+    if (eligible == null) return null;
+    data.lastAutoInteractionAt = now;
+    _changed();
+    return inviteMomentInteractions(eligible.id);
+  }
+
+  void setChatStyle({double? opacity, int? mine, int? theirs, bool? showTime}) {
+    if (opacity != null) data.chatBubbleOpacity = opacity.clamp(.35, 1.0).toDouble();
+    if (mine != null) data.myBubbleColor = mine;
+    if (theirs != null) data.aiBubbleColor = theirs;
+    if (showTime != null) data.showChatTime = showTime;
+    _changed();
+  }
+
   void allowMoments(String id, bool value) {
     final c = character(id);
     if (c == null) return;
     c.allowMoments = value;
     _changed();
+  }
+
+  MomentEntry? moment(String id) {
+    for (final m in data.moments) { if (m.id == id) return m; }
+    return null;
+  }
+
+  bool toggleMyMomentLike(String momentId) {
+    final m = moment(momentId);
+    if (m == null) return false;
+    if (m.likedBy.contains('me')) {
+      m.likedBy = [...m.likedBy]..remove('me');
+    } else {
+      m.likedBy = [...m.likedBy, 'me'];
+    }
+    _changed();
+    return true;
+  }
+
+  MomentComment? addMyMomentComment(String momentId, String text,
+      {String? parentId}) {
+    final m = moment(momentId);
+    if (m == null || text.trim().isEmpty || text.trim().length > 300) return null;
+    if (parentId != null && !m.comments.any((c) => c.id == parentId)) return null;
+    final comment = MomentComment(id: newId(), authorId: 'me',
+      text: text.trim(), createdAt: DateTime.now(), parentId: parentId);
+    m.comments = [...m.comments, comment];
+    _changed();
+    return comment;
+  }
+
+  List<Character> socialAudience(MomentEntry m) => data.characters.where((c) =>
+    c.id != m.characterId && areFriends(c.id, m.characterId)).toList();
+
+  /// Manually invoked: each eligible AI decides whether to like or comment.
+  /// Never loops on its own: maximum two model calls for a user action.
+  Future<String?> inviteMomentInteractions(String momentId) async {
+    final m = moment(momentId);
+    if (m == null) return '动态已被删除。';
+    final thread = 'moment_interact:$momentId';
+    if (busy.contains(thread)) return '这条动态正在互动中。';
+    final audience = socialAudience(m).where((c) => c.allowSocialInteractions &&
+      !m.likedBy.contains(c.id) &&
+      !m.comments.any((cm) => cm.authorId == c.id && cm.parentId == null))
+      .take(2).toList();
+    if (audience.isEmpty) return '没有可互动的 AI：请先设置角色好友关系、开启互动权限，或这些好友已经互动过。';
+    busy.add(thread); notifyListeners();
+    final failures = <String>[];
+    try {
+      for (final actor in audience) {
+        final profileForActor = profile(actor.apiProfileId);
+        if (profileForActor == null) {
+          failures.add('${actor.name}未绑定模型'); continue;
+        }
+        final key = await getKey(profileForActor.id);
+        if (key == null || key.isEmpty) {
+          failures.add('${actor.name}未设置 API Key'); continue;
+        }
+        final client = http.Client();
+        _clients[thread] = client;
+        try {
+          final answer = await MultiModelApi.call(client: client,
+            profile: profileForActor, apiKey: key, persona: actor.persona,
+            roleName: actor.name,
+            turns: [ModelTurn('user', '''你看到朋友「${displayName(m.characterId)}」发了一条虚拟朋友圈：
+「${m.text}」
+你和他/她在本地社交世界里是朋友。根据你的性格选择一种真实自然的反应：
+仅输出 LIKE 或 SKIP 或 COMMENT: 你的评论文字。
+不要重复动态原文、不要解释格式，评论不超过60字。''')]);
+          final choice = answer.trim();
+          if (choice.toUpperCase().startsWith('LIKE')) {
+            if (!m.likedBy.contains(actor.id)) m.likedBy = [...m.likedBy, actor.id];
+            _changed();
+          } else if (!choice.toUpperCase().startsWith('SKIP')) {
+            // Most models follow COMMENT:, but some relay models answer with
+            // a natural sentence or a full-width colon. Keep that usable.
+            final text = choice.replaceFirst(RegExp(
+              r'^(COMMENT\s*[:：]\s*|评论\s*[:：]\s*)', caseSensitive: false),
+              '').replaceAll(RegExp(r'^`+|`+$'), '').trim();
+            if (text.isNotEmpty) {
+              m.comments = [...m.comments, MomentComment(
+                id: newId(), authorId: actor.id,
+                text: text.length > 160 ? text.substring(0, 160) : text,
+                createdAt: DateTime.now())];
+              _changed();
+            }
+          }
+        } catch (e) { failures.add('${actor.name}：$e'); }
+        finally { client.close(); _clients.remove(thread); }
+      }
+      return failures.isEmpty ? null : failures.join('\n');
+    } finally { busy.remove(thread); notifyListeners(); }
+  }
+
+  /// User-triggered or explicitly opted-in after user comments.
+  /// Owner responds first (if allowed), plus at most one mutual friend.
+  Future<String?> replyToMomentComment(String momentId, String commentId) async {
+    final m = moment(momentId);
+    if (m == null) return '动态已被删除。';
+    final target = m.comments.where((c) => c.id == commentId).firstOrNull;
+    if (target == null) return '评论已不存在。';
+    final thread = 'moment_reply:$momentId:$commentId';
+    if (busy.contains(thread)) return '正在生成评论回复。';
+    final owner = character(m.characterId);
+    final candidates = <Character>[
+      if (owner != null) owner,
+      ...socialAudience(m),
+    ].where((c) => c.allowSocialInteractions && c.id != target.authorId &&
+      !m.comments.any((cm) => cm.parentId == target.id && cm.authorId == c.id))
+      .take(2).toList();
+    if (candidates.isEmpty) return '没有可回复的 AI：请为发布者或其好友打开朋友圈互动权限，或他们已经回复过。';
+    busy.add(thread); notifyListeners();
+    final failures = <String>[];
+    try {
+      for (final actor in candidates) {
+        final p = profile(actor.apiProfileId);
+        if (p == null) { failures.add('${actor.name}未绑定模型'); continue; }
+        final key = await getKey(p.id);
+        if (key == null || key.isEmpty) { failures.add('${actor.name}缺少 API Key'); continue; }
+        final client = http.Client();
+        _clients[thread] = client;
+        try {
+          final context = m.comments.reversed.take(8).toList().reversed
+            .map((c) => '${displayName(c.authorId)}：${c.text}').join('\n');
+          final answer = await MultiModelApi.call(client: client, profile: p,
+            apiKey: key, persona: actor.persona, roleName: actor.name,
+            turns: [ModelTurn('user', '''这是一条虚构的朋友圈动态。
+发布者：${displayName(m.characterId)}
+动态：${m.text}
+最新评论：
+$context
+你要回复「${displayName(target.authorId)}」这句评论：「${target.text}」。
+请用自己的人格和口吻说一句自然的中文回复，不要扮演其他人，不要重复档案，不超过70字。只输出回复正文。''')]);
+          final text = answer.trim();
+          if (text.isNotEmpty) {
+            m.comments = [...m.comments, MomentComment(id: newId(),
+              authorId: actor.id, text: text.length > 180 ? text.substring(0, 180) : text,
+              parentId: target.id, createdAt: DateTime.now())];
+            _changed();
+          }
+        } catch (e) { failures.add('${actor.name}：$e'); }
+        finally { client.close(); _clients.remove(thread); }
+      }
+      return failures.isEmpty ? null : failures.join('\n');
+    } finally { busy.remove(thread); notifyListeners(); }
   }
 
   void addGroup(ChatGroup g) { data.groups.add(g); _changed(); }
@@ -182,6 +393,55 @@ class AppController extends ChangeNotifier {
       entry.senderId == aiId ? 'assistant' : 'user',
       group ? '${displayName(entry.senderId)}：${entry.text}' : entry.text,
     )).toList();
+  }
+
+  void editMessage(String threadId, String messageId, String newText) {
+    if (busy.contains(threadId) || newText.trim().isEmpty) return;
+    final index = data.messages.indexWhere(
+      (m) => m.id == messageId && m.threadId == threadId);
+    if (index < 0) return;
+    final target = data.messages[index];
+    target.text = newText.trim();
+    // Editing an old user message invalidates generated replies after it.
+    if (target.senderId == 'me') {
+      data.messages.removeWhere((m) => m.threadId == threadId &&
+        m.createdAt.isAfter(target.createdAt));
+    }
+    _changed();
+  }
+
+  /// Re-answer the last private user turn without adding another user bubble.
+  /// Keep the previous reply until a replacement successfully arrives.
+  Future<String?> regeneratePrivate(Character c) async {
+    final thread = privateThread(c.id);
+    if (busy.contains(thread)) return '回复正在生成中。';
+    final entries = threadMessages(thread);
+    final lastUser = entries.lastIndexWhere((m) => m.senderId == 'me');
+    if (lastUser < 0) return '请先发送一条消息。';
+    final p = profile(c.apiProfileId);
+    if (p == null) return '请先绑定 API 配置。';
+    final key = await getKey(p.id);
+    if (key == null || key.isEmpty) return '请先填写 API Key。';
+    final prior = entries.sublist(0, lastUser + 1);
+    final recent = prior.length > 12 ? prior.sublist(prior.length - 12) : prior;
+    final turns = recent.map((m) => ModelTurn(
+      m.senderId == c.id ? 'assistant' : 'user', m.text)).toList();
+    busy.add(thread); _stopped.remove(thread); notifyListeners();
+    final client = http.Client(); _clients[thread] = client;
+    try {
+      final reply = await MultiModelApi.call(client: client, profile: p,
+        apiKey: key, persona: c.persona, roleName: c.name, turns: turns,
+        onText: (text) { if (!_stopped.contains(thread)) _partial(thread,c.id,text); });
+      if (!_stopped.contains(thread)) {
+        final lastUserAt = prior.last.createdAt;
+        data.messages.removeWhere((m) => m.threadId == thread &&
+          m.createdAt.isAfter(lastUserAt));
+        _addMessage(thread, c.id, reply);
+      }
+      return null;
+    } catch (e) { return _stopped.contains(thread) ? null : '$e'; }
+    finally { client.close(); _clients.remove(thread); _clearPartial(thread);
+      busy.remove(thread); _stopped.remove(thread); notifyListeners(); }
   }
 
   void _addMessage(String thread, String sender, String text) {

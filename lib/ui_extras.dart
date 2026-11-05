@@ -6,75 +6,220 @@ import 'app_controller.dart';
 import 'models.dart';
 import 'ui_shell.dart';
 
-class MomentsTab extends StatelessWidget {
+class MomentsTab extends StatefulWidget {
   final AppController controller;
   const MomentsTab({super.key, required this.controller});
+  @override
+  State<MomentsTab> createState() => _MomentsTabState();
+}
 
-  Future<void> _showOptions(BuildContext context) async {
+class _MomentsTabState extends State<MomentsTab> {
+  AppController get controller => widget.controller;
+
+  Future<void> _showOptions() async {
     await showModalBottomSheet<void>(context: context,
       isScrollControlled: true, showDragHandle: true,
-      builder: (sheetContext) => SafeArea(child: Padding(
-        padding: const EdgeInsets.all(18),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Text('选择一个 AI 生成朋友圈',
-            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 19)),
-          const SizedBox(height: 9),
-          const Text('默认全部关闭。用户明确授权后，才允许手动生成。'
-            '本版本不会后台自行发朋友圈。'),
-          const SizedBox(height: 8),
-          ...controller.data.characters.map((c) => ListTile(
-            leading: CharacterAvatar(character: c, local: controller.local),
-            title: Text(c.name),
-            subtitle: Text(c.allowMoments ? '已授权生成朋友圈' : '尚未授权'),
-            trailing: Switch(value: c.allowMoments,
-              onChanged: (v) {
-                controller.allowMoments(c.id, v);
+      builder: (sheetContext) => StatefulBuilder(builder: (sheetContext, refresh) =>
+        SafeArea(child: Padding(padding: const EdgeInsets.all(18),
+          child: SingleChildScrollView(child: Column(
+            mainAxisSize: MainAxisSize.min, children: [
+            const Text('生成虚拟朋友圈',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 19)),
+            const SizedBox(height: 9),
+            const Text('只有已允许发朋友圈的角色才能生成。不会在后台自动发布。'),
+            const Divider(),
+            ...controller.data.characters.map((c) => ListTile(
+              leading: CharacterAvatar(character: c, local: controller.local),
+              title: Text(c.name),
+              subtitle: Text(c.allowMoments ? '已授权 · 点击生成动态' : '未授权发布'),
+              trailing: Switch(value: c.allowMoments,
+                onChanged: (value) {
+                  controller.allowMoments(c.id, value);
+                  refresh(() {});
+                }),
+              onTap: () async {
+                if (!c.allowMoments) {
+                  uiError(context, '请先打开 ${c.name} 的朋友圈发布权限。');
+                  return;
+                }
                 Navigator.pop(sheetContext);
-                _showOptions(context);
+                final error = await controller.generateMoment(c);
+                if (mounted && error != null) uiError(context, error);
+              },
+            )),
+          ]))))));
+  }
+
+  Future<void> _settings() async {
+    await showModalBottomSheet<void>(context: context, showDragHandle: true,
+      builder: (sheetContext) => StatefulBuilder(builder: (sheetContext, refresh) =>
+        SafeArea(child: Padding(padding: const EdgeInsets.all(18),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Text('朋友圈互动设置',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+            SwitchListTile(title: const Text('打开朋友圈时自动邀请好友互动'),
+              subtitle: const Text('默认关闭。仅在进入朋友圈时触发，最多每小时 1 条动态、2 位 AI。'),
+              value: controller.data.autoMomentInteractions,
+              onChanged: (value) {
+                controller.setAutoMomentInteractions(value);
+                refresh(() {});
               }),
-            onTap: () async {
-              if (!c.allowMoments) {
-                uiError(context, '请先开启 ${c.name} 的朋友圈权限。'); return;
-              }
-              Navigator.pop(sheetContext);
-              final err = await controller.generateMoment(c);
-              if (err != null && context.mounted) uiError(context, err);
-            },
-          )),
-        ]))));
+            SwitchListTile(title: const Text('我评论后让 AI 自动回复'),
+              subtitle: const Text('默认关闭。打开后最多调用两位已授权 AI，可能产生 API 费用。'),
+              value: controller.data.autoMomentReplies,
+              onChanged: (value) {
+                controller.setAutoMomentReplies(value);
+                refresh(() {});
+              }),
+            const Text('AI 好友关系和点赞/评论权限在每个联系人的资料中设置。\n'
+              '不进行后台无限轮互动，只有用户操作或明确打开相关开关才调用模型。',
+              style: TextStyle(fontSize: 12)),
+            const SizedBox(height: 16),
+          ])))));
+  }
+
+  Future<void> _comment(MomentEntry m, {MomentComment? parent}) async {
+    final text = TextEditingController();
+    try {
+      final newComment = await showDialog<String>(context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: Text(parent == null ? '发表评论' : '回复 ${controller.displayName(parent.authorId)}'),
+          content: TextField(controller: text, autofocus: true,
+            minLines: 2, maxLines: 5, maxLength: 300,
+            decoration: const InputDecoration(hintText: '说点什么…', border: OutlineInputBorder())),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('取消')),
+            FilledButton(onPressed: () => Navigator.pop(dialogContext, text.text.trim()),
+              child: const Text('发表')),
+          ],
+        ));
+      if (!mounted || newComment == null || newComment.isEmpty) return;
+      final comment = controller.addMyMomentComment(m.id, newComment, parentId: parent?.id);
+      if (comment == null) { uiError(context, '评论发送失败，请检查长度。'); return; }
+      if (controller.data.autoMomentReplies) {
+        final err = await controller.replyToMomentComment(m.id, comment.id);
+        if (mounted && err != null) uiError(context, err);
+      }
+    } finally { text.dispose(); }
+  }
+
+  Future<void> _invite(MomentEntry moment) async {
+    final error = await controller.inviteMomentInteractions(moment.id);
+    if (mounted && error != null) uiError(context, error);
+  }
+
+  Future<void> _reply(MomentEntry m, MomentComment comment) async {
+    final error = await controller.replyToMomentComment(m.id, comment.id);
+    if (mounted && error != null) uiError(context, error);
+  }
+
+  Widget _commentRow(BuildContext context, MomentEntry m, MomentComment comment) {
+    final parent = comment.parentId == null ? null :
+      m.comments.where((c) => c.id == comment.parentId).firstOrNull;
+    final display = controller.displayName(comment.authorId);
+    final responding = controller.busy.contains('moment_reply:${m.id}:${comment.id}');
+    return Padding(padding: EdgeInsets.only(left: comment.parentId == null ? 0 : 16),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Expanded(child: InkWell(onTap: () => _comment(m, parent: comment),
+          child: Padding(padding: const EdgeInsets.symmetric(vertical: 5),
+            child: Text.rich(TextSpan(children: [
+              TextSpan(text: display, style: const TextStyle(fontWeight: FontWeight.bold)),
+              if (parent != null) ...[
+                const TextSpan(text: ' 回复 '),
+                TextSpan(text: controller.displayName(parent.authorId),
+                  style: const TextStyle(fontWeight: FontWeight.bold)),
+              ],
+              TextSpan(text: '：${comment.text}'),
+            ]))))),
+        IconButton(tooltip: '邀请 AI 回复这条评论',
+          visualDensity: VisualDensity.compact,
+          onPressed: responding ? null : () => _reply(m, comment),
+          icon: responding ? const SizedBox(width: 16, height: 16,
+            child: CircularProgressIndicator(strokeWidth: 2)) :
+            const Icon(Icons.smart_toy_outlined, size: 17)),
+      ]));
+  }
+
+  Widget _momentCard(BuildContext context, MomentEntry m) {
+    final c = controller.character(m.characterId);
+    final busy = controller.busy.contains('moment_interact:${m.id}');
+    return Padding(padding: const EdgeInsets.fromLTRB(14, 14, 14, 18),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          if (c != null) CharacterAvatar(character: c,
+            local: controller.local, radius: 21)
+          else const CircleAvatar(child: Icon(Icons.smart_toy)),
+          const SizedBox(width: 10),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(c?.name ?? '已删除的角色',
+              style: const TextStyle(fontWeight: FontWeight.bold)),
+            Text('${m.createdAt.month}-${m.createdAt.day} ${clockTime(m.createdAt)} · 虚拟动态',
+              style: Theme.of(context).textTheme.labelSmall),
+          ])),
+        ]),
+        const SizedBox(height: 11),
+        SelectableText(m.text),
+        const SizedBox(height: 8),
+        Row(children: [
+          TextButton.icon(onPressed: () => controller.toggleMyMomentLike(m.id),
+            icon: Icon(m.likedBy.contains('me') ? Icons.favorite : Icons.favorite_border,
+              size: 18, color: m.likedBy.contains('me') ? Colors.redAccent : null),
+            label: Text('点赞 ${m.likedBy.length}')),
+          TextButton.icon(onPressed: () => _comment(m),
+            icon: const Icon(Icons.mode_comment_outlined, size: 18),
+            label: Text('评论 ${m.comments.length}')),
+          const Spacer(),
+          TextButton.icon(onPressed: busy ? null : () => _invite(m),
+            icon: busy ? const SizedBox(width: 15, height: 15,
+              child: CircularProgressIndicator(strokeWidth: 2)) :
+              const Icon(Icons.auto_awesome_outlined, size: 17),
+            label: const Text('好友互动')),
+        ]),
+        if (m.likedBy.isNotEmpty || m.comments.isNotEmpty)
+          Container(width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surfaceContainerLow,
+              borderRadius: BorderRadius.circular(9)),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              if (m.likedBy.isNotEmpty) ...[
+                Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Icon(Icons.favorite, size: 15, color: Colors.redAccent),
+                  const SizedBox(width: 7),
+                  Expanded(child: Text(m.likedBy.map(controller.displayName).join('、'),
+                    style: const TextStyle(fontSize: 13))),
+                ]),
+                if (m.comments.isNotEmpty) const Divider(height: 12),
+              ],
+              ...m.comments.map((comment) => _commentRow(context, m, comment)),
+            ])),
+      ]));
   }
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    body: controller.data.moments.isEmpty
-      ? const Center(child: Padding(padding: EdgeInsets.all(24),
-        child: Text('朋友圈还是空的。\n点击右下角，选择已授权的 AI 生成第一条动态。',
-          textAlign: TextAlign.center)))
-      : ListView.separated(itemCount: controller.data.moments.length,
+    body: Column(children: [
+      Container(padding: const EdgeInsets.fromLTRB(14, 6, 12, 6),
+        child: Row(children: [
+          const Icon(Icons.group_outlined, size: 16),
+          const SizedBox(width: 8),
+          const Expanded(child: Text('朋友圈只在本机模拟。好友需要建立关系并获得互动授权。',
+            style: TextStyle(fontSize: 11))),
+          IconButton(tooltip: '朋友圈设置', onPressed: _settings,
+            icon: const Icon(Icons.settings_outlined)),
+        ])),
+      const Divider(height: 1),
+      Expanded(child: controller.data.moments.isEmpty
+        ? const Center(child: Padding(padding: EdgeInsets.all(24),
+          child: Text('朋友圈还是空的。\n点击右下角，选择已授权的 AI 生成动态。',
+            textAlign: TextAlign.center)))
+        : ListView.separated(itemCount: controller.data.moments.length,
           separatorBuilder: (_, _) => const Divider(height: 1),
-          itemBuilder: (context, index) {
-            final m = controller.data.moments[index];
-            final c = controller.character(m.characterId);
-            return Padding(padding: const EdgeInsets.all(16),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Row(children: [
-                  if (c != null) CharacterAvatar(character: c, local: controller.local, radius: 19)
-                  else const CircleAvatar(child: Icon(Icons.smart_toy)),
-                  const SizedBox(width: 11),
-                  Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(c?.name ?? '已删除角色',
-                      style: const TextStyle(fontWeight: FontWeight.bold)),
-                    Text('${m.createdAt.year}-${m.createdAt.month}-${m.createdAt.day} '
-                      '${clockTime(m.createdAt)} · 虚拟动态',
-                      style: Theme.of(context).textTheme.labelSmall),
-                  ]),
-                ]),
-                const SizedBox(height: 12),
-                SelectableText(m.text),
-              ]));
-          }),
-    floatingActionButton: FloatingActionButton.extended(
-      onPressed: () => _showOptions(context),
+          itemBuilder: (context, index) => _momentCard(context,
+            controller.data.moments[index]))),
+    ]),
+    floatingActionButton: FloatingActionButton.extended(onPressed: _showOptions,
       icon: const Icon(Icons.auto_awesome), label: const Text('生成动态')),
   );
 }
@@ -174,6 +319,35 @@ class SettingsScreen extends StatelessWidget {
           child: Slider(min: .85, max: 1.35, divisions: 10,
             value: controller.data.fontScale.clamp(.85, 1.35).toDouble(),
             onChanged: (value) => controller.changeAppearance(scale: value))),
+        const Divider(),
+        const ListTile(leading: Icon(Icons.chat_bubble_outline),
+          title: Text('聊天气泡与时间'),
+          subtitle: Text('控制聊天气泡透明度、自己和 AI 的气泡颜色及时间显示。')),
+        ListTile(title: Text('聊天气泡透明度：${(controller.data.chatBubbleOpacity * 100).round()}%')),
+        Padding(padding: const EdgeInsets.symmetric(horizontal: 14),
+          child: Slider(min: .35, max: 1.0, divisions: 13,
+            value: controller.data.chatBubbleOpacity.clamp(.35, 1.0),
+            onChanged: (v) => controller.setChatStyle(opacity: v))),
+        const ListTile(title: Text('我的聊天气泡颜色')),
+        Padding(padding: const EdgeInsets.symmetric(horizontal: 14),
+          child: Wrap(spacing: 9, children: [0xFFB8EC9C, 0xFFFFE2AE,
+            0xFFC6E6F8, 0xFFFFD8E2, 0xFFD8D2FF, 0xFFFFFFFF].map((v) =>
+            ChoiceChip(label: const SizedBox(width: 12, height: 12),
+              avatar: CircleAvatar(backgroundColor: Color(v)),
+              selected: controller.data.myBubbleColor == v,
+              onSelected: (_) => controller.setChatStyle(mine: v))).toList())),
+        const ListTile(title: Text('AI 聊天气泡颜色')),
+        Padding(padding: const EdgeInsets.symmetric(horizontal: 14),
+          child: Wrap(spacing: 9, children: [0xFFFFFFFF, 0xFFF3EAF9,
+            0xFFDBF2FA, 0xFFFFE9D9, 0xFFD6F3E3, 0xFFE8E8E8].map((v) =>
+            ChoiceChip(label: const SizedBox(width: 12, height: 12),
+              avatar: CircleAvatar(backgroundColor: Color(v)),
+              selected: controller.data.aiBubbleColor == v,
+              onSelected: (_) => controller.setChatStyle(theirs: v))).toList())),
+        SwitchListTile(secondary: const Icon(Icons.access_time),
+          title: const Text('显示每条消息的时间'),
+          value: controller.data.showChatTime,
+          onChanged: (v) => controller.setChatStyle(showTime: v)),
         const Divider(),
         const ListTile(leading: Icon(Icons.lock_outline), title: Text('隐私和存储'),
           subtitle: Text('角色、普通聊天与动态保存在应用私有目录；'

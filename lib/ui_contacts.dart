@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 
 import 'api_client.dart';
 import 'app_controller.dart';
@@ -56,7 +57,9 @@ class _ApiProfileEditorScreenState extends State<ApiProfileEditorScreen> {
   late String _provider;
   late bool _streaming;
   late String _authMode;
+  late String _apiProtocol;
   late String _id;
+  bool _listingModels = false;
   bool _testing = false;
   bool _saving = false;
   bool _hideKey = true;
@@ -70,6 +73,7 @@ class _ApiProfileEditorScreenState extends State<ApiProfileEditorScreen> {
     _provider = initial?.provider ?? 'deepseek';
     _streaming = initial?.streaming ?? true;
     _authMode = initial?.authMode ?? 'bearer';
+    _apiProtocol = initial?.apiProtocol ?? 'chat';
     final sample = providerFor(_provider);
     _label = TextEditingController(text: initial?.label ?? sample.label);
     _base = TextEditingController(text: initial?.baseUrl ?? sample.baseUrl);
@@ -98,7 +102,7 @@ class _ApiProfileEditorScreenState extends State<ApiProfileEditorScreen> {
     baseUrl: _base.text.trim(), modelId: _model.text.trim(),
     anthropicVersion: _anthropicVersion.text.trim(),
     workspaceId: _workspaceId.text.trim(), streaming: _streaming,
-    authMode: _authMode);
+    authMode: _authMode, apiProtocol: _apiProtocol);
 
   Future<void> _test() async {
     if (_testing) return;
@@ -114,6 +118,50 @@ class _ApiProfileEditorScreenState extends State<ApiProfileEditorScreen> {
     } finally {
       if (mounted) setState(() => _testing = false);
     }
+  }
+
+  Future<void> _fetchModels() async {
+    if (_listingModels) return;
+    setState(() => _listingModels = true);
+    final client = http.Client();
+    try {
+      final key = _key.text.trim().isEmpty
+        ? await widget.controller.getKey(_id) ?? '' : _key.text.trim();
+      final models = await MultiModelApi.listModels(
+        client: client, profile: _formProfile(), apiKey: key);
+      if (!mounted) return;
+      final search = TextEditingController();
+      try {
+        final chosen = await showModalBottomSheet<String>(context: context,
+          isScrollControlled: true, showDragHandle: true,
+          builder: (sheetContext) => StatefulBuilder(
+            builder: (sheetContext, refresh) {
+              final visible = models.where((id) => id.toLowerCase().contains(
+                search.text.trim().toLowerCase())).take(250).toList();
+              return SafeArea(child: SizedBox(height: MediaQuery.sizeOf(sheetContext).height * .72,
+                child: Padding(padding: const EdgeInsets.symmetric(horizontal: 18),
+                  child: Column(children: [
+                    Text('可用模型（${models.length}）',
+                      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 12),
+                    TextField(controller: search,
+                      decoration: const InputDecoration(prefixIcon: Icon(Icons.search),
+                        hintText: '搜索模型 ID', border: OutlineInputBorder()),
+                      onChanged: (_) => refresh(() {})),
+                    const SizedBox(height: 8),
+                    Expanded(child: ListView.builder(itemCount: visible.length,
+                      itemBuilder: (_, i) => ListTile(
+                        title: Text(visible[i]), trailing: const Icon(Icons.add),
+                        onTap: () => Navigator.pop(sheetContext, visible[i])))),
+                    const SizedBox(height: 6),
+                    const Text('模型列表来自你填写的服务商；也可以手动输入 ID。',
+                      style: TextStyle(fontSize: 12)),
+                  ]))));
+            }));
+        if (chosen != null && mounted) setState(() => _model.text = chosen);
+      } finally { search.dispose(); }
+    } catch (e) { if (mounted) uiError(context, e); }
+    finally { client.close(); if (mounted) setState(() => _listingModels = false); }
   }
 
   Future<void> _save() async {
@@ -150,6 +198,7 @@ class _ApiProfileEditorScreenState extends State<ApiProfileEditorScreen> {
             _label.text = p.label;
             _base.text = p.baseUrl;
             _model.text = p.exampleModel;
+            _apiProtocol = 'chat';
             _testResult = null;
           });
         }),
@@ -162,15 +211,32 @@ class _ApiProfileEditorScreenState extends State<ApiProfileEditorScreen> {
           border: OutlineInputBorder(), helperText: '仅支持 HTTPS；请只连接可信服务商'),
         onChanged: (_) => setState(() {})),
       const SizedBox(height: 14),
-      TextField(controller: _model, autocorrect: false,
-        decoration: const InputDecoration(labelText: '模型 ID',
-          border: OutlineInputBorder(), helperText: '示例 ID 可能不是你的账号可用模型')),
+      Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Expanded(child: TextField(controller: _model, autocorrect: false,
+          decoration: const InputDecoration(labelText: '模型 ID（可手动填写）',
+            border: OutlineInputBorder(), helperText: '请选择或输入服务商实际支持的 ID'))),
+        const SizedBox(width: 8),
+        Padding(padding: const EdgeInsets.only(top: 4),
+          child: OutlinedButton.icon(onPressed: _listingModels ? null : _fetchModels,
+            icon: _listingModels ? const SizedBox(width: 15, height: 15,
+              child: CircularProgressIndicator(strokeWidth: 2)) :
+              const Icon(Icons.list_alt_outlined),
+            label: const Text('获取模型'))),
+      ]),
       if (_provider == 'custom') ...[
         const SizedBox(height: 8),
-        const Text('中转站支持 OpenAI Chat Completions 的情况下，填写到 /v1，'
-          '也可以直接填写完整的 /chat/completions 地址。若站点只有 Responses 协议，'
-          '当前版本不兼容。请只使用可信站点：站点会收到密钥与聊天内容。',
+        const Text('中转站常用 HTTPS 地址填写到 /v1；也可填写完整 /chat/completions 或 /responses 路径。'
+          '如果中转站的模型接口并不兼容所选协议，依然可能请求失败。'
+          '注意：中转站会接收你的 API Key 和聊天内容。',
           style: TextStyle(fontSize: 12)),
+        const SizedBox(height: 12),
+        DropdownButtonFormField<String>(value: _apiProtocol,
+          decoration: const InputDecoration(labelText: '中转站 API 协议',
+            border: OutlineInputBorder()),
+          items: const [
+            DropdownMenuItem(value: 'chat', child: Text('OpenAI Chat Completions')),
+            DropdownMenuItem(value: 'responses', child: Text('OpenAI Responses API')),
+          ], onChanged: (v) => setState(() => _apiProtocol = v ?? 'chat')),
         const SizedBox(height: 12),
         DropdownButtonFormField<String>(value: _authMode,
           decoration: const InputDecoration(labelText: '中转站认证方式',
@@ -269,6 +335,18 @@ class CharacterDetailScreen extends StatelessWidget {
             subtitle: const Text('默认关闭；仅在你手动点击生成时产生内容'),
             value: c.allowMoments,
             onChanged: (value) => controller.allowMoments(c.id, value)),
+          SwitchListTile(title: const Text('允许参与朋友圈互动'),
+            subtitle: const Text('独立授权：允许模型点赞、评论和回复；默认关闭'),
+            value: c.allowSocialInteractions,
+            onChanged: (value) => controller.setSocialPermission(c.id, value)),
+          const Divider(),
+          const ListTile(title: Text('AI 好友关系'),
+            subtitle: Text('只有互相设置为好友的 AI 才能看见彼此的虚拟动态并参与互动。')),
+          ...controller.data.characters.where((other) => other.id != c.id).map((other) =>
+            SwitchListTile(title: Text(other.name),
+              secondary: CharacterAvatar(character: other, local: controller.local, radius: 18),
+              value: controller.areFriends(c.id, other.id),
+              onChanged: (v) => controller.setFriendship(c.id, other.id, v))),
           Padding(padding: const EdgeInsets.all(16), child: Column(children: [
             FilledButton.icon(onPressed: () => Navigator.push(context,
               MaterialPageRoute(builder: (_) => ChatScreen(controller: controller, friend: c))),
@@ -297,6 +375,7 @@ class _CharacterEditorScreenState extends State<CharacterEditorScreen> {
   late String _avatarPath;
   bool _importingAvatar = false;
   late bool _canPost;
+  late bool _canInteract;
   bool _loadingFile = false;
   @override
   void initState() {
@@ -308,6 +387,7 @@ class _CharacterEditorScreenState extends State<CharacterEditorScreen> {
     _avatarColor = c?.avatarColor ?? 0xFFB67BB8;
     _avatarPath = c?.avatarPath ?? '';
     _canPost = c?.allowMoments ?? false;
+    _canInteract = c?.allowSocialInteractions ?? false;
   }
   @override
   void dispose() { _name.dispose(); _persona.dispose(); super.dispose(); }
@@ -349,7 +429,8 @@ class _CharacterEditorScreenState extends State<CharacterEditorScreen> {
     final c = Character(id: widget.initial?.id ?? newId(),
       name: _name.text.trim(), persona: _persona.text.trim(),
       apiProfileId: _boundProfile.isEmpty ? null : _boundProfile,
-      allowMoments: _canPost, avatarColor: _avatarColor,
+      allowMoments: _canPost, allowSocialInteractions: _canInteract,
+      friendIds: widget.initial?.friendIds ?? const [], avatarColor: _avatarColor,
       avatarPath: _avatarPath);
     widget.controller.upsertCharacter(c);
     Navigator.pop(context);
@@ -422,6 +503,10 @@ class _CharacterEditorScreenState extends State<CharacterEditorScreen> {
           title: const Text('允许发布朋友圈'),
           subtitle: const Text('默认关闭；本版只支持手动触发生成'),
           value: _canPost, onChanged: (v) => setState(() => _canPost = v)),
+        SwitchListTile(contentPadding: EdgeInsets.zero,
+          title: const Text('允许朋友圈点赞与评论'),
+          subtitle: const Text('默认关闭；仅对好友、经手动触发或打开自动回复时生效'),
+          value: _canInteract, onChanged: (v) => setState(() => _canInteract = v)),
         const SizedBox(height: 18),
         FilledButton(onPressed: _save, child: const Text('保存到通讯录')),
       ]));

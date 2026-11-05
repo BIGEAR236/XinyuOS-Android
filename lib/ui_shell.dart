@@ -172,7 +172,13 @@ class _SocialScreenState extends State<SocialScreen> {
       bottomNavigationBar: Column(mainAxisSize: MainAxisSize.min, children: [
         MiniPlayer(controller: widget.controller),
         NavigationBar(selectedIndex: index,
-        onDestinationSelected: (next) => setState(() => index = next),
+        onDestinationSelected: (next) async {
+          setState(() => index = next);
+          if (next == 2) {
+            final err = await widget.controller.maybeAutoSocialSweep();
+            if (mounted && err != null) uiError(context, err);
+          }
+        },
         destinations: const [
           NavigationDestination(icon: Icon(Icons.chat_bubble_outline),
             selectedIcon: Icon(Icons.chat_bubble), label: '聊天'),
@@ -256,7 +262,7 @@ class MyTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) => ListView(children: [
     const ListTile(leading: CircleAvatar(child: Icon(Icons.auto_awesome)),
-      title: Text('心屿 OS'), subtitle: Text('V3.2 · 本地优先 · AI 社交')),
+      title: Text('心屿 OS'), subtitle: Text('V3.3 · 本地优先 · AI 社交')),
     const Divider(),
     ListTile(leading: const Icon(Icons.hub_outlined), title: const Text('API 管理'),
       subtitle: const Text('添加服务商、测试连接、修改模型'),
