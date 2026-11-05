@@ -4,6 +4,7 @@ import 'app_controller.dart';
 import 'models.dart';
 import 'proactive_service.dart';
 import 'ui_extras.dart';
+import 'ui_shell.dart';
 
 /// In-device event memory. The user confirms every date and every character's
 /// right to initiate a follow-up. No server, no silent unlimited API calls.
