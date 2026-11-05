@@ -1,7 +1,7 @@
 name: xinyu_os
 publish_to: none
 description: 心屿 OS — 跨平台 AI 虚拟手机（本地优先）
-version: 3.6.0+7
+version: 3.7.0+8
 
 environment:
   sdk: '>=3.10.0 <4.0.0'
@@ -16,6 +16,8 @@ dependencies:
   file_picker: ^13.3.2
   path_provider: '>=2.1.5 <2.1.6'
   just_audio: ^0.10.6
+  video_player: 2.11.1
+  flutter_markdown_plus: ^1.0.12
   archive: '>=4.0.9 <4.1.0'
   flutter_local_notifications: ^19.5.0
   timezone: ^0.10.1

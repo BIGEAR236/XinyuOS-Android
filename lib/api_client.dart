@@ -62,22 +62,49 @@ class MultiModelApi {
     return summary.length > 1800 ? summary.substring(0, 1800) : summary;
   }
 
+  /// The handset's clock is an app-owned trusted signal. The model is not
+  /// allowed to manufacture real-time observations it has not been given.
+  static String clockContext(DateTime now) {
+    final local = now.toLocal();
+    String pad(int v) => v.toString().padLeft(2, '0');
+    const days = ['周一','周二','周三','周四','周五','周六','周日'];
+    final offset = local.timeZoneOffset;
+    final sign = offset.isNegative ? '-' : '+';
+    final minutes = offset.inMinutes.abs();
+    return '${local.year}-${pad(local.month)}-${pad(local.day)} '
+      '${days[local.weekday - 1]} ${pad(local.hour)}:${pad(local.minute)} '
+      '(UTC$sign${pad(minutes ~/ 60)}:${pad(minutes % 60)}；${local.timeZoneName})';
+  }
+
+  static String formatDirective(String mode) => switch (mode) {
+    'json' => '本会话要求输出严格合法的 JSON（无 Markdown 围栏、无额外解释）。如需给字段请输出 JSON 对象。',
+    'markdown' => '按 Markdown 输出，支持标题、列表、表格和带语言名的三反引号代码块。不要转义 Markdown 标记。',
+    'plain' => '仅输出纯文本，不要使用 Markdown 标记、代码围栏或 JSON 包装。',
+    _ => '自动格式：用户在最新消息里明确要求 JSON、Markdown、表格、代码块、步骤或指定字段时，优先严格遵循该格式；未提出时自然聊天。',
+  };
+
   static String systemPrompt(String persona, {bool group = false,
-      String roleName = '', String chatMode = 'daily'}) {
+      String roleName = '', String chatMode = 'daily',
+      String formatMode = 'auto', DateTime? now, String contextHint = ''}) {
     final story = chatMode == 'story';
     final name = roleName.trim();
     final setting = _profileExcerpt(persona, story: story);
-    return '''你是一个供用户互动的虚构 AI 角色，唯一角色名字是「${name.isEmpty ? '未命名' : name}」。
-你必须优先回答用户当前的问题。角色设定是背景资料，不是需要续写的历史聊天记录。
-【最高优先级的日常交流规则】
-- 问「你是谁」「你叫什么」：直接回答「我叫${name.isEmpty ? '…' : name}」并最多补充一句，不复述剧本文字。
-- 用户只问一句话，你也先用一两句自然回复；除非用户希望听故事，否则不输出长段落。
-- 不要背诵设定文件，不复述上传文档中的原始台词、戏剧旁白、章节标题、角色扮演脚本或示例对话。
-- 即使背景材料中包含与用户不同的关系和地点，也不要假装它们真的发生过；聊天只引用实际本次会话确认的信息。
-- 不得声称读取未经提供的个人信息、执行过不存在的现实动作，或突破应用工具权限。
-${story ? '- 用户已选择沉浸剧情模式：允许适量动作和环境描写，但依然要回应问题，不复制档案。' : '- 用户已选择日常聊天模式：禁止使用括号描写动作、小说式独白、旁白、场景切换或长篇回忆。保持像即时通讯一样自然的口语。'}
-${group ? '- 你正在群聊，只代表本角色说话，不替其他成员回答。' : ''}
-【角色背景参考，非待续写文本】
+    final currentTime = clockContext(now ?? DateTime.now());
+    return '''你在心屿 OS 里扮演一个明确标识为 AI 的虚构角色，名字是「${name.isEmpty ? '未命名' : name}」。
+【时间与真实工具上下文】
+本机当前时间：$currentTime。
+这是手机提供的时钟，不是你的训练截止日。涉及日期、下周、星期几、多久后，应以此时钟为基础计算；不了解天气、新闻和真实交易等实时信息时不要编造。不可声称执行了未提供的工具或访问了现实账户。
+${contextHint.trim().isEmpty ? '' : '本次活动上下文（由本机应用提供，不表示你亲眼看见场景）：\n$contextHint'}
+【回复原则】
+- 先理解并回应用户最新消息。被问到姓名时可简短回答「我叫${name.isEmpty ? '…' : name}」。角色档案是身份与剧情设定，不能当成当前对话的原文进行复制。
+- 用户明确提出的输出结构、格式、字段、字数、示例或代码要求，优先于角色的文风倾向；不要因为沉浸剧情而破坏 JSON、表格或代码块。
+- 不要背诵设定文件。可以保持角色口吻，但不要泄露不相关人格档案或把设定文本当作上一轮用户消息。
+- 角色不能假称知道用户真实位置、现实世界事实或没有共享过的隐私数据。
+${story ? '- 沉浸剧情模式：允许适量动作和环境描写，也可表达情绪。用户要求格式化输出时减少不必要的旁白。' : '- 日常聊天模式：默认简短自然，禁止使用括号描写动作，不强行加旁白；用户要求详细答复或长格式时可以展开。'}
+${group ? '- 群聊：只代表该角色发言，不代替其他群成员说话。' : ''}
+【本会话格式规则】
+${formatDirective(formatMode)}
+【角色设定/剧情参考，不能作为最近聊天记录】
 $setting
 【结束】''';
   }
@@ -233,10 +260,13 @@ $setting
   static BuiltApiRequest buildRequest({required ApiProfile profile,
     required String apiKey, required String persona,
     required List<ModelTurn> turns, bool group = false,
-    String roleName = '', String chatMode = 'daily'}) {
+    String roleName = '', String chatMode = 'daily',
+    String formatMode = 'auto', DateTime? now, String contextHint = ''}) {
     if (apiKey.trim().isEmpty) throw ApiCallFailure('缺少 API Key，请先保存密钥。');
     final uri = _endpoint(profile);
-    final system = systemPrompt(persona, group: group, roleName: roleName, chatMode: chatMode);
+    final system = systemPrompt(persona, group: group, roleName: roleName,
+      chatMode: chatMode, formatMode: formatMode, now: now,
+      contextHint: contextHint);
     final messages = _mergedTurns(turns);
     if (messages.isEmpty) throw ApiCallFailure('没有可发送的消息。');
     List<Object> chatParts(ModelTurn m) => [
@@ -268,7 +298,7 @@ $setting
         headers['anthropic-workspace-id'] = profile.workspaceId.trim();
       }
       payload.addAll({
-        'model': profile.modelId.trim(), 'max_tokens': 512,
+        'model': profile.modelId.trim(), 'max_tokens': (formatMode == 'json' || formatMode == 'markdown') ? 1600 : 512,
         'system': system,
         'messages': messages.map((m) => {'role': m.role,
           'content': m.imageBase64 == null ? m.text : claudeParts(m)}).toList(),
@@ -282,7 +312,7 @@ $setting
           'role': m.role == 'assistant' ? 'model' : 'user',
           'parts': geminiParts(m),
         }).toList(),
-        'generationConfig': {'maxOutputTokens': 512},
+        'generationConfig': {'maxOutputTokens': (formatMode == 'json' || formatMode == 'markdown') ? 1600 : 512},
       });
     } else {
       if (profile.provider == 'custom' && profile.authMode == 'x-api-key') {
@@ -301,7 +331,7 @@ $setting
                 'data:${m.imageMime ?? 'image/jpeg'};base64,${m.imageBase64}'},
             ]}).toList(),
           'stream': profile.streaming,
-          'max_output_tokens': 512,
+          'max_output_tokens': (formatMode == 'json' || formatMode == 'markdown') ? 1600 : 512,
         });
       } else { payload.addAll({
         'model': profile.modelId.trim(),
@@ -510,11 +540,13 @@ $setting
     required ApiProfile profile, required String apiKey,
     required String persona, required List<ModelTurn> turns,
     String roleName = '', bool group = false, String chatMode = 'daily',
+    String formatMode = 'auto', DateTime? now, String contextHint = '',
     void Function(String)? onText,
     void Function(TokenUsage)? onUsage}) async {
     final request = buildRequest(profile: profile, apiKey: apiKey,
       persona: persona, turns: turns, roleName: roleName, group: group,
-      chatMode: chatMode);
+      chatMode: chatMode, formatMode: formatMode, now: now,
+      contextHint: contextHint);
     final parseFormat = profile.provider == 'custom' && profile.apiProtocol == 'responses'
       ? 'responses' : profile.provider;
     final req = http.Request('POST', request.uri)

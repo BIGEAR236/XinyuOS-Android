@@ -1,0 +1,18 @@
+心屿 OS V3.6 — 联系人页空值编译错误修复
+
+原因：file_picker 13.x 的 PlatformFile.length() 可能返回 null。
+修复了两个地方：
+- lib/ui_contacts.dart 原第 447 行：头像上传大小检查
+- lib/ui_contacts.dart 原第 652 行：聊天背景图片大小检查
+
+修复后的代码先检查非 null 的文件元数据，并在复制到 App 文件目录后检查实际文件大小。超过限制时删除复制的文件并提示。
+
+使用方法：
+1. 解压 ZIP。把里面 lib/ui_contacts.dart 覆盖 GitHub Desktop 本地仓库中相同路径。
+2. 保留其他源文件，不要改签名密钥，不要卸载原 APK。
+3. Commit to main → Push origin。
+4. 在 GitHub Actions 查看新构建结果。
+
+注意：本修复包基于先前已修复 uiError 的 V3.6 完整工程，只修复当前日志明确报告的两条 Dart error。
+剩余 31 条 info/warning 在 --no-fatal-infos --no-fatal-warnings 下通常不导致 analyze 失败。
+由于本运行环境没有 Flutter/Dart SDK，未能在此执行 flutter analyze / 编译真机 APK。

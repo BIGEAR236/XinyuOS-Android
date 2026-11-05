@@ -246,7 +246,7 @@ class ProactiveEvent {
     'delivered': delivered, 'lastAttemptAt': lastAttemptAt?.toIso8601String()};
 }
 
-const List<String> defaultDesktopOrder = ['chat', 'api', 'music', 'settings', 'album', 'memo', 'diary'];
+const List<String> defaultDesktopOrder = ['chat', 'api', 'music', 'settings', 'album', 'memo', 'diary', 'world', 'wallet', 'pet', 'shop', 'watch'];
 
 List<String> normalizeDesktopOrder(Object? raw) {
   final incoming = raw is List ? raw.map((v) => '$v') : const <String>[];
@@ -259,6 +259,112 @@ List<String> normalizeDesktopOrder(Object? raw) {
   }
   return result;
 }
+
+
+/// Fictional local-only items: NOT money, commerce or real deliveries.
+class VirtualLedgerEntry {
+  final String id;
+  final DateTime createdAt;
+  final int delta;
+  final String description;
+  final String? characterId;
+  VirtualLedgerEntry({required this.id, required this.createdAt,
+    required this.delta, required this.description, this.characterId});
+  factory VirtualLedgerEntry.fromJson(Map<String, dynamic> j) => VirtualLedgerEntry(
+    id: '${j['id'] ?? newId()}',
+    createdAt: DateTime.tryParse('${j['createdAt']}') ?? DateTime.now(),
+    delta: (j['delta'] as num?)?.toInt() ?? 0,
+    description: '${j['description'] ?? ''}',
+    characterId: j['characterId'] as String?);
+  Map<String, dynamic> toJson() => {'id': id, 'createdAt': createdAt.toIso8601String(),
+    'delta': delta, 'description': description, 'characterId': characterId};
+}
+
+class VirtualPet {
+  String name;
+  String species;
+  int hunger; // 0 starving, 100 fed
+  int happiness;
+  int energy;
+  int level;
+  int affection;
+  DateTime lastCareAt;
+  VirtualPet({this.name = '团团', this.species = '猫', this.hunger = 75,
+    this.happiness = 70, this.energy = 80, this.level = 1,
+    this.affection = 0, DateTime? lastCareAt}) : lastCareAt = lastCareAt ?? DateTime.now();
+  factory VirtualPet.fromJson(Map<String, dynamic> j) => VirtualPet(
+    name: '${j['name'] ?? '团团'}', species: '${j['species'] ?? '猫'}',
+    hunger: ((j['hunger'] as num?)?.toInt() ?? 75).clamp(0,100).toInt(),
+    happiness: ((j['happiness'] as num?)?.toInt() ?? 70).clamp(0,100).toInt(),
+    energy: ((j['energy'] as num?)?.toInt() ?? 80).clamp(0,100).toInt(),
+    level: ((j['level'] as num?)?.toInt() ?? 1).clamp(1,99).toInt(),
+    affection: ((j['affection'] as num?)?.toInt() ?? 0).clamp(0,99999).toInt(),
+    lastCareAt: DateTime.tryParse('${j['lastCareAt']}'));
+  Map<String, dynamic> toJson() => {'name': name, 'species': species,
+    'hunger': hunger, 'happiness': happiness, 'energy': energy,
+    'level': level, 'affection': affection,
+    'lastCareAt': lastCareAt.toIso8601String()};
+}
+
+class VirtualOrder {
+  final String id;
+  final DateTime createdAt;
+  final String title;
+  final int count;
+  final int total;
+  final String? giftedTo;
+  VirtualOrder({required this.id, required this.createdAt, required this.title,
+    required this.count, required this.total, this.giftedTo});
+  factory VirtualOrder.fromJson(Map<String, dynamic> j) => VirtualOrder(
+    id: '${j['id'] ?? newId()}',
+    createdAt: DateTime.tryParse('${j['createdAt']}') ?? DateTime.now(),
+    title: '${j['title'] ?? ''}', count: (j['count'] as num?)?.toInt() ?? 1,
+    total: (j['total'] as num?)?.toInt() ?? 0,
+    giftedTo: j['giftedTo'] as String?);
+  Map<String, dynamic> toJson() => {'id': id, 'createdAt': createdAt.toIso8601String(),
+    'title': title, 'count': count, 'total': total, 'giftedTo': giftedTo};
+}
+
+class WorldEvent {
+  final String id;
+  final DateTime createdAt;
+  final String kind;
+  final String description;
+  final String? characterId;
+  WorldEvent({required this.id, required this.createdAt, required this.kind,
+    required this.description, this.characterId});
+  factory WorldEvent.fromJson(Map<String, dynamic> j) => WorldEvent(
+    id: '${j['id'] ?? newId()}',
+    createdAt: DateTime.tryParse('${j['createdAt']}') ?? DateTime.now(),
+    kind: '${j['kind'] ?? 'other'}', description: '${j['description'] ?? ''}',
+    characterId: j['characterId'] as String?);
+  Map<String, dynamic> toJson() => {'id': id, 'createdAt': createdAt.toIso8601String(),
+    'kind': kind, 'description': description, 'characterId': characterId};
+}
+
+class VirtualShopItem {
+  final String id;
+  final String category;
+  final String title;
+  final String emoji;
+  final int cost;
+  const VirtualShopItem(this.id, this.category, this.title, this.emoji, this.cost);
+}
+
+const virtualShop = <VirtualShopItem>[
+  VirtualShopItem('coffee','约会','拿铁双人套餐','☕',36),
+  VirtualShopItem('bouquet','礼物','星光花束','💐',88),
+  VirtualShopItem('teddy','礼物','软绵绵玩偶','🧸',52),
+  VirtualShopItem('books','生活','故事书','📖',28),
+  VirtualShopItem('movie','约会','家庭电影夜套装','🎬',65),
+  VirtualShopItem('collar','宠物','铃铛项圈','🐈',24),
+  VirtualShopItem('food','宠物','宠物零食','🦴',16),
+  VirtualShopItem('hat','穿搭','晴天帽子','🧢',49),
+  VirtualShopItem('cake','美食','生日蛋糕','🎂',98),
+  VirtualShopItem('plant','生活','小盆栽','🪴',32),
+  VirtualShopItem('postcard','礼物','手写明信片','💌',12),
+  VirtualShopItem('lamp','家居','星星小夜灯','🌟',72),
+];
 
 class AppData {
   List<ApiProfile> profiles;
@@ -287,6 +393,17 @@ class AppData {
   String chatMode; // daily / story
   bool allowProactiveMessages;
   List<ProactiveEvent> proactiveEvents;
+  Map<String, String> threadFormats; // auto, markdown, json, plain
+  bool autoMomentPosting; // default OFF; foreground-only
+  int autoMomentEveryHours;
+  Map<String, String> lastAiPostAt; // character id => ISO timestamp
+  int worldBalance; // virtual-only, non-redeemable tokens
+  List<VirtualLedgerEntry> worldLedger;
+  VirtualPet worldPet;
+  List<VirtualOrder> worldOrders;
+  List<WorldEvent> worldEvents;
+  Map<String, int> worldCart;
+  String lastWatchPath;
   AppData({required this.profiles, required this.characters, required this.groups,
     required this.messages, required this.moments, required this.tracks,
     this.notes = const [], this.albumPaths = const [],
@@ -297,7 +414,13 @@ class AppData {
     this.lastAutoInteractionAt, this.chatBubbleOpacity = 1.0,
     this.myBubbleColor = 0xFFB8EC9C, this.aiBubbleColor = 0xFFFFFFFF,
     this.showChatTime = false, this.chatMode = 'daily',
-    this.allowProactiveMessages = false, this.proactiveEvents = const []});
+    this.allowProactiveMessages = false, this.proactiveEvents = const [],
+    this.threadFormats = const {}, this.autoMomentPosting = false,
+    this.autoMomentEveryHours = 24, this.lastAiPostAt = const {},
+    this.worldBalance = 1200, this.worldLedger = const [],
+    VirtualPet? worldPet, this.worldOrders = const [], this.worldEvents = const [],
+    this.worldCart = const {}, this.lastWatchPath = ''})
+       : worldPet = worldPet ?? VirtualPet();
   factory AppData.initial() => AppData(
     profiles: [], characters: [
       Character(id: 'sample_xiaoman', name: '小满',
@@ -308,7 +431,8 @@ class AppData {
         persona: '你叫阿泽，性格沉稳、理性，偶尔冷幽默。'
           '说话简洁，乐于倾听，不随意断言现实事实。', avatarColor: 0xFF8BA9D1),
     ], groups: [], messages: [], moments: [], tracks: [],
-    proactiveEvents: [], notes: [], albumPaths: []);
+    proactiveEvents: [], notes: [], albumPaths: [],
+    worldLedger: [], worldOrders: [], worldEvents: []);
   factory AppData.fromJson(Map<String, dynamic> j) => AppData(
     profiles: listJson(j['profiles']).map(ApiProfile.fromJson).toList(),
     characters: listJson(j['characters']).map(Character.fromJson).toList(),
@@ -335,9 +459,20 @@ class AppData {
     chatMode: j['chatMode'] == 'story' ? 'story' : 'daily',
     allowProactiveMessages: j['allowProactiveMessages'] == true,
     proactiveEvents: listJson(j['proactiveEvents'])
-      .map(ProactiveEvent.fromJson).toList());
+      .map(ProactiveEvent.fromJson).toList(),
+    threadFormats: mapJson(j['threadFormats']).map((k,v) => MapEntry(k,'$v')),
+    autoMomentPosting: j['autoMomentPosting'] == true,
+    autoMomentEveryHours: ((j['autoMomentEveryHours'] as num?)?.toInt() ?? 24).clamp(4,168).toInt(),
+    lastAiPostAt: mapJson(j['lastAiPostAt']).map((k,v)=>MapEntry(k,'$v')),
+    worldBalance: ((j['worldBalance'] as num?)?.toInt() ?? 1200).clamp(0,9999999).toInt(),
+    worldLedger: listJson(j['worldLedger']).map(VirtualLedgerEntry.fromJson).toList(),
+    worldPet: j['worldPet'] is Map ? VirtualPet.fromJson(mapJson(j['worldPet'])) : VirtualPet(),
+    worldOrders: listJson(j['worldOrders']).map(VirtualOrder.fromJson).toList(),
+    worldEvents: listJson(j['worldEvents']).map(WorldEvent.fromJson).toList(),
+    worldCart: mapJson(j['worldCart']).map((k,v) => MapEntry(k,(v is num ? v.toInt() : 0).clamp(0,99).toInt())),
+    lastWatchPath: '${j['lastWatchPath'] ?? ''}');
   Map<String, dynamic> toJson() => {
-    'version': 7,
+    'version': 8,
     'profiles': profiles.map((v) => v.toJson()).toList(),
     'characters': characters.map((v) => v.toJson()).toList(),
     'groups': groups.map((v) => v.toJson()).toList(),
@@ -357,6 +492,17 @@ class AppData {
     'showChatTime': showChatTime, 'chatMode': chatMode,
     'allowProactiveMessages': allowProactiveMessages,
     'proactiveEvents': proactiveEvents.map((e) => e.toJson()).toList(),
+    'threadFormats': threadFormats,
+    'autoMomentPosting': autoMomentPosting,
+    'autoMomentEveryHours': autoMomentEveryHours,
+    'lastAiPostAt': lastAiPostAt,
+    'worldBalance': worldBalance,
+    'worldLedger': worldLedger.map((v) => v.toJson()).toList(),
+    'worldPet': worldPet.toJson(),
+    'worldOrders': worldOrders.map((v) => v.toJson()).toList(),
+    'worldEvents': worldEvents.map((v) => v.toJson()).toList(),
+    'worldCart': worldCart,
+    'lastWatchPath': lastWatchPath,
   };
   String serialize() => jsonEncode(toJson());
 }

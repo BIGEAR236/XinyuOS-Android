@@ -12,6 +12,7 @@ import 'ui_contacts.dart';
 import 'ui_extras.dart';
 import 'ui_social_settings.dart';
 import 'ui_local_apps.dart';
+import 'ui_world.dart';
 
 void uiError(BuildContext context, Object error) {
   if (!context.mounted) return;
@@ -84,6 +85,26 @@ class PhoneHomeScreen extends StatelessWidget {
         icon = Icons.auto_stories_outlined; title = '日记';
         color = const Color(0xFFC79CBB);
         destination = LocalNotesScreen(controller: controller, category: 'diary'); break;
+      case 'world':
+        icon=Icons.auto_awesome_outlined; title='虚拟世界';
+        color=const Color(0xFF8D7CCA);
+        destination=WorldHubScreen(controller:controller); break;
+      case 'wallet':
+        icon=Icons.account_balance_wallet_outlined; title='虚拟钱包';
+        color=const Color(0xFFC89E59);
+        destination=VirtualWalletScreen(controller:controller); break;
+      case 'pet':
+        icon=Icons.pets_rounded; title='养宠物';
+        color=const Color(0xFFDA9A8B);
+        destination=VirtualPetScreen(controller:controller); break;
+      case 'shop':
+        icon=Icons.shopping_bag_outlined; title='星愿商店';
+        color=const Color(0xFF8CB89F);
+        destination=VirtualShopScreen(controller:controller); break;
+      case 'watch':
+        icon=Icons.ondemand_video_outlined; title='一起看';
+        color=const Color(0xFF7D93C8);
+        destination=CoWatchScreen(controller:controller); break;
       default:
         icon = Icons.settings_rounded; title = '设置';
         color = const Color(0xFF8B8C98);
@@ -136,18 +157,22 @@ class PhoneHomeScreen extends StatelessWidget {
           const SizedBox(height: 10),
           const Text('心屿 · 让故事继续',
             style: TextStyle(color: Colors.white70, letterSpacing: 2)),
-          const Spacer(),
-          MiniPlayer(controller: controller),
-          const SizedBox(height: 12),
-          ConstrainedBox(constraints: const BoxConstraints(maxWidth: 380),
-            child: Wrap(spacing: 8, runSpacing: 15,
-              alignment: WrapAlignment.center,
-              children: normalizeDesktopOrder(controller.data.desktopOrder)
-                .map((key) => _desktopTile(context, key)).toList())),
-          const SizedBox(height: 18),
-          const Text('长按图标并拖到另一图标上，可调整桌面顺序',
-            style: TextStyle(color: Colors.white70, fontSize: 11)),
-          const Spacer(),
+          const SizedBox(height: 16),
+          Expanded(child: SingleChildScrollView(
+            physics: const BouncingScrollPhysics(),
+            child: Column(children: [
+              MiniPlayer(controller: controller),
+              const SizedBox(height: 12),
+              ConstrainedBox(constraints: const BoxConstraints(maxWidth: 380),
+                child: Wrap(spacing: 8, runSpacing: 15,
+                  alignment: WrapAlignment.center,
+                  children: normalizeDesktopOrder(controller.data.desktopOrder)
+                    .map((key) => _desktopTile(context, key)).toList())),
+              const SizedBox(height: 18),
+              const Text('长按图标并拖到另一图标上，可调整桌面顺序',
+                style: TextStyle(color: Colors.white70, fontSize: 11)),
+            ]))),
+          const SizedBox(height: 16),
           Container(width: 110, height: 5, decoration: BoxDecoration(
             color: Colors.white70, borderRadius: BorderRadius.circular(8))),
         ]))),
@@ -196,12 +221,18 @@ class _SocialScreenState extends State<SocialScreen> with WidgetsBindingObserver
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) widget.controller.processDueEvents();
+      if (mounted) {
+        widget.controller.processDueEvents();
+        widget.controller.maybeAutoPostMoment();
+      }
     });
   }
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) widget.controller.processDueEvents();
+    if (state == AppLifecycleState.resumed) {
+      widget.controller.processDueEvents();
+      widget.controller.maybeAutoPostMoment();
+    }
   }
   @override
   void dispose() {
@@ -246,6 +277,7 @@ class _SocialScreenState extends State<SocialScreen> with WidgetsBindingObserver
         onDestinationSelected: (next) async {
           setState(() => index = next);
           if (next == 2) {
+            await widget.controller.maybeAutoPostMoment();
             final err = await widget.controller.maybeAutoSocialSweep();
             if (mounted && err != null) uiError(context, err);
           }

@@ -7,9 +7,11 @@ import 'package:http/http.dart' as http;
 
 import 'api_client.dart';
 import 'local_data.dart';
+import 'local_tools.dart';
 import 'models.dart';
 import 'music_controller.dart';
 import 'proactive_service.dart';
+import 'request_gate.dart';
 
 class AppController extends ChangeNotifier {
   final LocalData local;
@@ -23,6 +25,8 @@ class AppController extends ChangeNotifier {
   final Set<String> busy = {};
   final Set<String> _stopped = {};
   final Map<String, http.Client> _clients = {};
+  // Each request gets an epoch; stale results MUST NOT write to a newer chat.
+  final RequestGate _gate = RequestGate();
   String? persistenceError;
   bool _proactiveRunning = false;
   DateTime? _lastProactiveCheck;
@@ -306,7 +310,7 @@ class AppController extends ChangeNotifier {
     _proactiveRunning = true;
     ev.lastAttemptAt = now;
     _changed();
-    busy.add(thread); notifyListeners();
+    final run=_begin(thread);
     final client = http.Client(); _clients[thread] = client;
     try {
       final previous = _turns(thread, c.id);
@@ -320,7 +324,7 @@ class AppController extends ChangeNotifier {
       final answer = await MultiModelApi.call(client: client,
         profile: p, apiKey: key, persona: c.persona, roleName: c.name,
         chatMode: 'daily', turns: [...previous, note]);
-      if (answer.trim().isNotEmpty) {
+      if (_current(thread,run) && answer.trim().isNotEmpty) {
         _addMessage(thread, c.id, answer.trim());
         ev.delivered = true;
         _changed();
@@ -328,8 +332,9 @@ class AppController extends ChangeNotifier {
     } catch (_) {
       // Keep event pending; retry only after cooldown and once app is opened.
     } finally {
-      client.close(); _clients.remove(thread);
-      busy.remove(thread); _proactiveRunning = false; notifyListeners();
+      _finish(thread,run,client);
+      _proactiveRunning = false;
+      notifyListeners();
     }
   }
 
@@ -549,6 +554,15 @@ $context
       text: clean, createdAt: DateTime.now()));
     _changed();
   }
+  /// /time and /calc are local commands, not paid model calls.
+  bool runLocalCommand(String thread, String input) {
+    final response=LocalTools.run(input,DateTime.now());
+    if (response==null) return false;
+    _addMessage(thread,'me',input);
+    _addMessage(thread,'system',response);
+    return true;
+  }
+
   void sendLocalImage(String thread, String imagePath, {String text = ''}) {
     if (busy.contains(thread)) return;
     data.messages.add(ChatEntry(id: newId(), threadId: thread, senderId: 'me',
@@ -567,6 +581,117 @@ $context
     m.text = newText.trim(); m.editedAt = DateTime.now(); _changed();
   }
 
+
+  // --- Purely local virtual-world economy. Never real money. ---
+  bool _spend(int amount, String reason, {String? characterId}) {
+    if (amount <= 0 || amount > data.worldBalance || amount > 100000) return false;
+    data.worldBalance -= amount;
+    data.worldLedger.add(VirtualLedgerEntry(id:newId(), createdAt:DateTime.now(),
+      delta:-amount, description:reason, characterId:characterId));
+    return true;
+  }
+
+  void _worldEvent(String kind, String description, {String? characterId}) {
+    data.worldEvents.add(WorldEvent(id:newId(), createdAt:DateTime.now(),
+      kind:kind, description:description, characterId:characterId));
+    if (data.worldEvents.length > 150) data.worldEvents.removeAt(0);
+    _changed();
+  }
+
+  bool dailyCheckIn() {
+    final today = DateTime.now();
+    if (data.worldLedger.any((l) => l.description == '每日签到' &&
+      l.createdAt.year == today.year && l.createdAt.month == today.month &&
+      l.createdAt.day == today.day)) return false;
+    data.worldBalance = (data.worldBalance + 60).clamp(0,9999999).toInt();
+    data.worldLedger.add(VirtualLedgerEntry(id:newId(), createdAt:today,
+      delta:60,description:'每日签到'));
+    _worldEvent('checkin','用户领取了60星币签到奖励');
+    return true;
+  }
+
+  bool giveRedEnvelope(String characterId, int amount, {String note = '祝你开心'}) {
+    final c = character(characterId);
+    if (c == null || amount < 1 || amount > 500 ||
+        !_spend(amount, '给${c.name}发送虚拟红包', characterId:characterId)) return false;
+    _addMessage(privateThread(characterId),'me','🧧 虚拟红包 $amount 星币：$note');
+    _worldEvent('gift','我给${c.name}送了 $amount 星币虚拟红包',characterId:characterId);
+    return true;
+  }
+
+  void renamePet(String name) {
+    final value = name.trim();
+    if (value.isEmpty || value.length > 18) return;
+    data.worldPet.name = value;
+    _changed();
+  }
+
+  bool careForPet(String action, {String? withCharacterId}) {
+    final pet = data.worldPet;
+    if (action == 'feed' && !_spend(12,'给${pet.name}买虚拟宠物粮')) return false;
+    if (action == 'feed') { pet.hunger = (pet.hunger+28).clamp(0,100).toInt(); pet.happiness=(pet.happiness+4).clamp(0,100).toInt(); }
+    else if (action == 'play') { pet.hunger=(pet.hunger-8).clamp(0,100).toInt(); pet.energy=(pet.energy-13).clamp(0,100).toInt(); pet.happiness=(pet.happiness+22).clamp(0,100).toInt(); }
+    else if (action == 'rest') { pet.energy=(pet.energy+30).clamp(0,100).toInt(); pet.happiness=(pet.happiness+5).clamp(0,100).toInt(); }
+    else return false;
+    pet.affection += 10;
+    pet.level = (pet.affection ~/ 80 + 1).clamp(1,99).toInt();
+    pet.lastCareAt = DateTime.now();
+    final actor = withCharacterId == null ? '我' : '我和${displayName(withCharacterId)}';
+    final type = action == 'feed' ? '喂食' : action == 'play' ? '玩耍' : '休息';
+    _worldEvent('pet','$actor一起照顾${pet.name}：$type',characterId:withCharacterId);
+    return true;
+  }
+
+  void changeCart(String itemId, int count) {
+    if (!virtualShop.any((item)=>item.id == itemId)) return;
+    final updated = {...data.worldCart};
+    if (count <= 0) { updated.remove(itemId); }
+    else { updated[itemId] = count.clamp(1,20).toInt(); }
+    data.worldCart=updated; _changed();
+  }
+
+  int get worldCartTotal => virtualShop.fold<int>(0,(sum,item)=>
+    sum + item.cost*(data.worldCart[item.id] ?? 0));
+
+  bool checkoutVirtualCart({String? giftTo}) {
+    final total=worldCartTotal;
+    if (total <= 0 || total > data.worldBalance) return false;
+    if (giftTo != null && character(giftTo)==null) return false;
+    if (!_spend(total,'虚拟商店购物${giftTo==null ? '' : '（送给${displayName(giftTo)}）'}',
+      characterId:giftTo)) return false;
+    for (final entry in data.worldCart.entries) {
+      final item=virtualShop.where((it)=>it.id==entry.key).firstOrNull;
+      if (item==null) continue;
+      data.worldOrders.add(VirtualOrder(id:newId(),createdAt:DateTime.now(),
+        title:item.title,count:entry.value,total:item.cost*entry.value,giftedTo:giftTo));
+    }
+    data.worldCart={};
+    _worldEvent('shopping','我在虚拟商店购买了总价 $total 星币的模拟物品'
+      '${giftTo==null ? '' : '，赠给${displayName(giftTo)}'}',characterId:giftTo);
+    return true;
+  }
+
+  void setWatchPath(String path) { data.lastWatchPath=path; _changed(); }
+
+  void setAutoMomentPosting(bool enabled) { data.autoMomentPosting=enabled; _changed(); }
+  void setAutoMomentHours(int hours) {
+    data.autoMomentEveryHours=hours.clamp(4,168).toInt(); _changed();
+  }
+
+  /// Foreground-only, one AI post per check, user opt-in + per-character grant.
+  Future<String?> maybeAutoPostMoment() async {
+    if (!data.autoMomentPosting) return null;
+    final now=DateTime.now();
+    for (final c in data.characters) {
+      if (!c.allowMoments) continue;
+      final last=DateTime.tryParse(data.lastAiPostAt[c.id] ?? '');
+      if (last!=null && now.difference(last).inHours<data.autoMomentEveryHours) continue;
+      data.lastAiPostAt={...data.lastAiPostAt,c.id:now.toIso8601String()};
+      _changed(); // even if call fails, do not retry rapidly and waste tokens
+      return generateMoment(c);
+    }
+    return null;
+  }
 
   void setDesktopIcon(String id, String relativePath) {
     data.desktopIcons = {...data.desktopIcons, id: relativePath};
@@ -596,11 +721,62 @@ $context
     notifyListeners();
   }
 
+  int _begin(String thread) {
+    final id = _gate.start(thread);
+    busy.add(thread);
+    _stopped.remove(thread);
+    notifyListeners();
+    return id;
+  }
+
+  bool _current(String thread, int generation) =>
+      _gate.isCurrent(thread, generation);
+
+  void _finish(String thread, int generation, http.Client client) {
+    client.close();
+    if (!_current(thread, generation)) return;
+    if (identical(_clients[thread], client)) _clients.remove(thread);
+    _clearPartial(thread);
+    busy.remove(thread);
+    _stopped.remove(thread);
+    notifyListeners();
+  }
+
+  /// Immediately unlock the UI. Closing the HTTP client aborts a live stream.
+  /// An epoch makes delayed callbacks from the cancelled request harmless.
   void stop(String threadId) {
+    _gate.cancel(threadId);
     _stopped.add(threadId);
     _clients.remove(threadId)?.close();
+    busy.remove(threadId);
     _clearPartial(threadId);
+    notifyListeners();
   }
+
+  String formatFor(String thread) => data.threadFormats[thread] ?? 'auto';
+
+  void setThreadFormat(String thread, String format) {
+    if (!const {'auto','markdown','json','plain'}.contains(format)) return;
+    data.threadFormats = {...data.threadFormats, thread: format};
+    _changed();
+  }
+
+  bool _validJson(String text) {
+    try { final parsed = jsonDecode(text); return parsed is Map || parsed is List; }
+    catch (_) { return false; }
+  }
+
+  String _worldContext(String characterId) {
+    final pet = data.worldPet;
+    final recent = data.worldEvents.reversed.where((e) => e.characterId == null || e.characterId == characterId).take(3).map((e) => e.description).join('；');
+    final listening = music.hasTrack
+      ? '用户当前在本机${music.playing ? '播放' : '暂停'}名为「${music.trackTitle}」的本地音乐。你没有收到音频，不能声称听到了声音。'
+      : '';
+    return '虚拟世界（完全模拟、无真实货币）：余额${data.worldBalance}星币；'
+      '宠物${pet.name}，心情${pet.happiness}/100，饥饿度${pet.hunger}/100。'
+      '${recent.isEmpty ? '' : '近期共同事件：$recent。'}$listening';
+  }
+
 
   List<ModelTurn> _turns(String threadId, String aiId, {bool group = false}) {
     final entries = threadMessages(threadId)
@@ -669,59 +845,95 @@ $context
       forwardedFrom: selected.length == 1 ? displayName(selected.first.senderId) : '聊天记录');
   }
 
-  /// Re-answer the last private user turn without adding another user bubble.
-  /// Keep the previous reply until a replacement successfully arrives.
-  Future<String?> regeneratePrivate(Character c) async {
-    final thread = privateThread(c.id);
-    if (busy.contains(thread)) return '回复正在生成中。';
-    final entries = threadMessages(thread);
-    final lastUser = entries.lastIndexWhere((m) => m.senderId == 'me');
-    if (lastUser < 0) return '请先发送一条消息。';
+  Future<String?> _generatePrivate(Character c, String thread,
+      {List<String> oldVersions = const [], String contextHint = ''}) async {
     final p = profile(c.apiProfileId);
     if (p == null) return '请先绑定 API 配置。';
     final key = await getKey(p.id);
     if (key == null || key.isEmpty) return '请先填写 API Key。';
-    final prior = entries.sublist(0, lastUser + 1);
-    final recent = prior.length > 12 ? prior.sublist(prior.length - 12) : prior;
-    final turns = recent.where((m) => !m.recalled).map((m) => ModelTurn(
-      m.senderId == c.id ? 'assistant' : 'user', _entryContext(m))).toList();
-    busy.add(thread); _stopped.remove(thread); notifyListeners();
+    if (busy.contains(thread)) return '此会话有正在生成的请求，请先停止。';
+    final turns = _turns(thread, c.id);
+    if (turns.isEmpty) return '没有有效的用户消息。';
+    final run = _begin(thread);
     final client = http.Client(); _clients[thread] = client;
+    final mode = formatFor(thread);
     try {
-      TokenUsage? replyUsage;
-      final reply = await MultiModelApi.call(client: client, profile: p,
-        apiKey: key, persona: c.persona, roleName: c.name, turns: turns,
-        chatMode: data.chatMode,
-        onUsage: (usage) => replyUsage = usage,
-        onText: (text) { if (!_stopped.contains(thread)) _partial(thread,c.id,text); });
-      if (!_stopped.contains(thread)) {
-        // Preserve earlier outputs as history of the new reply, not duplicate
-        // assistant turns that would contaminate subsequent context.
-        final lastUserAt = prior.last.createdAt;
-        final earlier = data.messages.where((m) => m.threadId == thread &&
-          m.senderId == c.id && m.createdAt.isAfter(lastUserAt)).toList();
-        final history = <String>[
-          for (final old in earlier) ...old.previousVersions,
-          for (final old in earlier) old.text,
-        ];
-        data.messages.removeWhere((m) => m.threadId == thread &&
-          m.senderId == c.id && m.createdAt.isAfter(lastUserAt));
-        _addMessage(thread, c.id, reply);
-        if (history.isNotEmpty) {
-          threadMessages(thread).last.previousVersions = history;
-          _changed();
-        }
-        if (replyUsage != null) {
-          final m = threadMessages(thread).last;
-          m.inputTokens = replyUsage!.input;
-          m.outputTokens = replyUsage!.output;
-          _changed();
-        }
+      TokenUsage? usage;
+      final context = [contextHint, _worldContext(c.id)].where((s) => s.trim().isNotEmpty).join('\n');
+      var answer = await MultiModelApi.call(client: client, profile: p,
+        apiKey: key, persona: c.persona, roleName: c.name,
+        turns: turns, chatMode: data.chatMode, formatMode: mode,
+        contextHint: context, onUsage: (u) => usage = u,
+        onText: (text) { if (_current(thread,run)) _partial(thread,c.id,text); });
+      if (!_current(thread,run)) return null;
+      // Explicit JSON mode: perform at most one format repair retry. A
+      // secondary call costs tokens, but preserves the user's strict output format.
+      if (mode == 'json' && !_validJson(answer)) {
+        _partial(thread,c.id,'正在修正 JSON 格式…');
+        answer = await MultiModelApi.call(client: client, profile: p,
+          apiKey: key, persona: c.persona, roleName: c.name,
+          chatMode: data.chatMode, formatMode: 'json',
+          contextHint: context,
+          turns: [...turns, ModelTurn('assistant', answer),
+            const ModelTurn('user', '上条输出不是有效的 JSON。请保持原意，重新输出唯一一个合法 JSON 对象或数组，不带代码围栏或前言。')],
+          onUsage: (u) => usage = u,
+          onText: (text) { if (_current(thread,run)) _partial(thread,c.id,text); });
+        if (!_validJson(answer)) throw ApiCallFailure('该模型未遵守 JSON 格式；请换模型或放宽格式要求。');
       }
+      if (!_current(thread,run)) return null;
+      final msg = ChatEntry(id: newId(), threadId: thread,
+        senderId: c.id, text: answer, createdAt: DateTime.now(),
+        previousVersions: [...oldVersions],
+        inputTokens: usage?.input, outputTokens: usage?.output);
+      data.messages.add(msg);
+      _changed();
       return null;
-    } catch (e) { return _stopped.contains(thread) ? null : '$e'; }
-    finally { client.close(); _clients.remove(thread); _clearPartial(thread);
-      busy.remove(thread); _stopped.remove(thread); notifyListeners(); }
+    } catch (e) {
+      return _current(thread,run) ? '$e' : null;
+    } finally {
+      _finish(thread, run, client);
+    }
+  }
+
+  /// Re-answer, showing a fresh streaming bubble immediately. Old answers
+  /// are stored as versions and restored only if the new request fails.
+  Future<String?> regeneratePrivate(Character c) async {
+    final thread = privateThread(c.id);
+    if (busy.contains(thread)) stop(thread);
+    final entries = threadMessages(thread);
+    final lastUser = entries.lastIndexWhere((m) => m.senderId == 'me' && !m.recalled);
+    if (lastUser < 0) return '请先发送一条消息。';
+    final following = entries.sublist(lastUser + 1).where((m) => m.senderId == c.id).toList();
+    final history = <String>[for (final m in following) ...m.previousVersions, for (final m in following) m.text];
+    data.messages.removeWhere((m) => following.any((old) => old.id == m.id));
+    _changed();
+    final err = await _generatePrivate(c, thread, oldVersions: history);
+    final currentEntries = threadMessages(thread);
+    final currentUserExists = currentEntries.any((m) => m.id == entries[lastUser].id);
+    final hasLaterReply = currentEntries.any((m) => m.senderId == c.id &&
+        m.createdAt.isAfter(entries[lastUser].createdAt));
+    if ((err != null || !hasLaterReply) && following.isNotEmpty &&
+        currentUserExists && !busy.contains(thread)) {
+      // Restore original replies after network/format errors.
+      data.messages.addAll(following);
+      data.messages.sort((a,b) => a.createdAt.compareTo(b.createdAt));
+      _changed();
+    }
+    return err;
+  }
+
+  /// Editing the user's message while generation is in progress is safe:
+  /// cancel first, remove dependent answers, then re-answer without adding a
+  /// duplicated user message. Old stale network responses cannot reappear.
+  Future<String?> editAndResendPrivate(Character c, String messageId, String text) async {
+    final thread = privateThread(c.id);
+    if (busy.contains(thread)) stop(thread);
+    final message = data.messages.where((m) =>
+        m.threadId == thread && m.id == messageId && m.senderId == 'me' && !m.recalled).firstOrNull;
+    if (message == null) return '消息不存在或无法编辑。';
+    if (text.trim().isEmpty) return '消息不能为空。';
+    editMessage(thread, messageId, text);
+    return _generatePrivate(c, thread);
   }
 
   void _addMessage(String thread, String sender, String text,
@@ -732,50 +944,17 @@ $context
     _changed();
   }
 
-  Future<String?> sendPrivate(Character c, String text, {ChatEntry? quote}) async {
+  Future<String?> sendPrivate(Character c, String text, {ChatEntry? quote,
+      String contextHint = ''}) async {
     final thread = privateThread(c.id);
-    if (busy.contains(thread)) return '上一条回复仍在生成中。';
+    if (busy.contains(thread)) return '请先停止上一条回复再发送。';
     final p = profile(c.apiProfileId);
     if (p == null) return '请先在好友资料中绑定 API 配置。';
     final key = await getKey(p.id);
     if (key == null || key.isEmpty) return '此 API 配置没有密钥，请先补充密钥。';
-    _addMessage(thread, 'me', text,
-      quotedText: quote?.text, quotedSender: quote == null ? null : displayName(quote.senderId));
-    _stopped.remove(thread);
-    busy.add(thread);
-    notifyListeners();
-    final client = http.Client();
-    _clients[thread] = client;
-    try {
-      TokenUsage? replyUsage;
-      final answer = await MultiModelApi.call(client: client, profile: p,
-        apiKey: key, persona: c.persona, roleName: c.name,
-        chatMode: data.chatMode, turns: _turns(thread, c.id),
-        onUsage: (usage) => replyUsage = usage,
-        onText: (text) {
-          if (!_stopped.contains(thread)) _partial(thread, c.id, text);
-        });
-      if (!_stopped.contains(thread)) {
-        _addMessage(thread, c.id, answer);
-        if (replyUsage != null) {
-          final m = threadMessages(thread).last;
-          m.inputTokens = replyUsage!.input;
-          m.outputTokens = replyUsage!.output;
-          _changed();
-        }
-      }
-      return null;
-    } catch (e) {
-      if (_stopped.contains(thread)) return null;
-      return '$e';
-    } finally {
-      client.close();
-      _clients.remove(thread);
-      _clearPartial(thread);
-      busy.remove(thread);
-      _stopped.remove(thread);
-      notifyListeners();
-    }
+    _addMessage(thread,'me',text,quotedText:quote?.text,
+      quotedSender:quote == null ? null : displayName(quote.senderId));
+    return _generatePrivate(c,thread,contextHint:contextHint);
   }
 
   /// Send image to a vision-capable model using provider-specific input blocks.
@@ -799,7 +978,7 @@ $context
     };
     if (mime == null) return '请使用 PNG、JPG、WEBP 或 GIF 图片。';
     sendLocalImage(thread, relativePath, text: '请看看这张图片，结合我们的聊天自然回应。');
-    busy.add(thread); _stopped.remove(thread); notifyListeners();
+    final run = _begin(thread);
     final client = http.Client(); _clients[thread] = client;
     try {
       final turns = _turns(thread, c.id);
@@ -810,10 +989,10 @@ $context
       TokenUsage? usage;
       final answer = await MultiModelApi.call(client: client, profile: p,
         apiKey: key, persona: c.persona, roleName: c.name,
-        chatMode: data.chatMode, turns: turns,
+        chatMode: data.chatMode, formatMode: formatFor(thread), turns: turns,
         onUsage: (u) => usage = u,
-        onText: (text) { if (!_stopped.contains(thread)) _partial(thread,c.id,text); });
-      if (!_stopped.contains(thread)) {
+        onText: (text) { if (_current(thread,run)) _partial(thread,c.id,text); });
+      if (_current(thread,run)) {
         _addMessage(thread, c.id, answer);
         if (usage != null) {
           final m = threadMessages(thread).last;
@@ -821,11 +1000,8 @@ $context
         }
       }
       return null;
-    } catch (e) { return _stopped.contains(thread) ? null : '$e'; }
-    finally {
-      client.close(); _clients.remove(thread); _clearPartial(thread);
-      busy.remove(thread); _stopped.remove(thread); notifyListeners();
-    }
+    } catch (e) { return _current(thread,run) ? '$e' : null; }
+    finally { _finish(thread,run,client); }
   }
 
   Future<String?> sendGroup(ChatGroup group, String text, {ChatEntry? quote}) async {
@@ -833,50 +1009,51 @@ $context
     if (busy.contains(thread)) return '当前群聊正在生成回复。';
     _addMessage(thread, 'me', text,
       quotedText: quote?.text, quotedSender: quote == null ? null : displayName(quote.senderId));
-    _stopped.remove(thread);
-    busy.add(thread);
-    notifyListeners();
+    final run = _begin(thread);
     var replied = 0;
     final failures = <String>[];
     try {
       for (final characterId in group.memberIds) {
-        if (_stopped.contains(thread) || replied >= group.maxReplies) break;
+        if (!_current(thread,run) || replied >= group.maxReplies) break;
         final c = character(characterId);
         if (c == null) continue;
         final p = profile(c.apiProfileId);
         if (p == null) { failures.add('${c.name}未绑定 API'); continue; }
         final key = await getKey(p.id);
         if (key == null || key.isEmpty) { failures.add('${c.name}缺少 API Key'); continue; }
-        if (_stopped.contains(thread)) break;
+        if (!_current(thread,run)) break;
         final client = http.Client();
         _clients[thread] = client;
         try {
           final answer = await MultiModelApi.call(client: client,
             profile: p, apiKey: key, persona: c.persona,
             roleName: c.name, chatMode: data.chatMode,
+            formatMode: formatFor(thread),
             turns: _turns(thread, c.id, group: true), group: true,
             onText: (text) {
-              if (!_stopped.contains(thread)) _partial(thread, c.id, text);
+              if (_current(thread,run)) _partial(thread, c.id, text);
             });
-          if (!_stopped.contains(thread)) {
+          if (_current(thread,run)) {
             _addMessage(thread, c.id, answer);
             replied++;
           }
         } catch (e) {
-          if (!_stopped.contains(thread)) failures.add('${c.name}: $e');
+          if (_current(thread,run)) failures.add('${c.name}: $e');
         } finally {
           client.close();
-          _clearPartial(thread);
+          if (_current(thread,run)) _clearPartial(thread);
           if (identical(_clients[thread], client)) _clients.remove(thread);
         }
       }
       return failures.isEmpty ? null : failures.join('\n');
     } finally {
-      _clients.remove(thread)?.close();
-      _clearPartial(thread);
-      busy.remove(thread);
-      _stopped.remove(thread);
-      notifyListeners();
+      if (_current(thread,run)) {
+        _clients.remove(thread)?.close();
+        _clearPartial(thread);
+        busy.remove(thread);
+        _stopped.remove(thread);
+        notifyListeners();
+      }
     }
   }
 
@@ -888,7 +1065,7 @@ $context
     if (p == null) return '先给该角色绑定 API 配置。';
     final key = await getKey(p.id);
     if (key == null || key.isEmpty) return 'API 密钥尚未配置。';
-    busy.add(thread); notifyListeners();
+    final run = _begin(thread);
     final client = http.Client();
     _clients[thread] = client;
     try {
@@ -897,16 +1074,15 @@ $context
         turns: [const ModelTurn('user',
           '请以当前角色第一人称写一条不超过 100 字的虚拟朋友圈动态。'
           '符合性格，不要冒充在现实中做过未经证实的事。只输出正文。')]);
-      if (c.allowMoments && !_stopped.contains(thread)) {
+      if (c.allowMoments && _current(thread,run)) {
         data.moments.insert(0, MomentEntry(id: newId(),
           characterId: c.id, text: text, createdAt: DateTime.now()));
         _changed();
       }
       return null;
-    } catch (e) { return '$e'; }
+    } catch (e) { return _current(thread,run) ? '$e' : null; }
     finally {
-      client.close(); _clients.remove(thread);
-      busy.remove(thread); _stopped.remove(thread); notifyListeners();
+      _finish(thread,run,client);
     }
   }
 

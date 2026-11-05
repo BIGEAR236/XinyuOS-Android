@@ -1,0 +1,14 @@
+心屿 OS V3.6 图片请求测试修复（单文件）
+
+这次 GitHub Actions 的 Flutter analyze 没有 error，29 个测试通过，只有 V3.6 图片输入合同测试失败。
+根因：lib/api_client.dart 中 _mergedTurns() 在复制当前 ModelTurn 时只保留 role/text，丢失 imageBase64 和 imageMime。
+修复：在构造合并后的消息时同时保留图片数据与 MIME 类型。
+
+使用方法：
+1. 解压本压缩包。
+2. 将 lib/api_client.dart 覆盖到 GitHub Desktop 仓库根目录下同路径。
+3. Commit to main → Push origin。
+4. GitHub Actions 将重新运行 flutter analyze、flutter test、Flutter APK 编译。
+
+无需更新 pubspec.yaml、签名密钥、激活模块或其他源码。
+此修复已通过源文件差异和请求组装逻辑检查；当前运行环境没有 Flutter SDK，无法在此执行真实 flutter test，因此以 GitHub Actions 结果为准。

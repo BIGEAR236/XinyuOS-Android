@@ -43,7 +43,7 @@ class _MomentsTabState extends State<MomentsTab> {
             const Text('生成虚拟朋友圈',
               style: TextStyle(fontWeight: FontWeight.bold, fontSize: 19)),
             const SizedBox(height: 9),
-            const Text('只有已允许发朋友圈的角色才能生成。不会在后台自动发布。'),
+            const Text('只有已允许发朋友圈的角色才能生成。自动发布仅在前台检查，不会在关闭 App 后定时调用。'),
             const Divider(),
             ...controller.data.characters.map((c) => ListTile(
               leading: CharacterAvatar(character: c, local: controller.local),
@@ -74,6 +74,24 @@ class _MomentsTabState extends State<MomentsTab> {
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             const Text('朋友圈互动设置',
               style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+            SwitchListTile(title: const Text('允许 AI 定期发布朋友圈（前台）'),
+              subtitle: const Text('默认关闭。只有你打开应用时检查，到期后最多生成一条；每位角色仍需单独授权。模型请求会产生费用。'),
+              value: controller.data.autoMomentPosting,
+              onChanged: (value) {
+                controller.setAutoMomentPosting(value);
+                refresh(() {});
+              }),
+            if (controller.data.autoMomentPosting)
+              ListTile(title: const Text('每位 AI 的最短发布间隔'),
+                subtitle: Text('${controller.data.autoMomentEveryHours} 小时'),
+                trailing: DropdownButton<int>(
+                  value: controller.data.autoMomentEveryHours,
+                  items: const [6,12,24,48,72,168].map((hours) =>
+                    DropdownMenuItem(value:hours,child:Text('$hours 小时'))).toList(),
+                  onChanged: (hours) {
+                    if (hours!=null) controller.setAutoMomentHours(hours);
+                    refresh(() {});
+                  })),
             SwitchListTile(title: const Text('打开朋友圈时自动邀请好友互动'),
               subtitle: const Text('默认关闭。仅在进入朋友圈时触发，最多每小时 1 条动态、2 位 AI。'),
               value: controller.data.autoMomentInteractions,

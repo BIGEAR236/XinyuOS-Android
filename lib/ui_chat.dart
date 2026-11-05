@@ -4,6 +4,7 @@ import 'package:file_picker/file_picker.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 
 import 'app_controller.dart';
 import 'models.dart';
@@ -40,6 +41,7 @@ class _ChatScreenState extends State<ChatScreen> {
     if (message.isEmpty || widget.controller.busy.contains(thread)) return;
     final quote = _quote;
     _input.clear(); _focus.unfocus(); setState(() => _quote = null);
+    if (widget.controller.runLocalCommand(thread,message)) return;
     String? err;
     if (widget.group != null) {
       err = await widget.controller.sendGroup(widget.group!, message, quote: quote);
@@ -89,21 +91,31 @@ class _ChatScreenState extends State<ChatScreen> {
     if (entry.senderId == 'system' || entry.recalled) return;
     final tc = TextEditingController(text: entry.text);
     try {
-      final result = await showDialog<String>(context: context, builder: (ctx) =>
-        AlertDialog(title: const Text('编辑本地消息'),
+      final action = await showDialog<String>(context: context, builder: (ctx) =>
+        AlertDialog(title: const Text('编辑消息'),
           content: TextField(controller: tc, autofocus: true, minLines: 2,
             maxLines: 8), actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, tc.text.trim()),
-            child: const Text('保存'))]));
-      if (!mounted || result == null || result.isEmpty || result == entry.text) return;
-      final laterExists = widget.controller.threadMessages(thread).any((m) =>
-        m.createdAt.isAfter(entry.createdAt));
-      if (laterExists && entry.senderId == 'me' && !await _confirm('修改较早的消息',
-        '修改自己的这条消息后，系统会删除它后面的本地回复，以避免上下文矛盾。确定继续吗？')) return;
-      if (laterExists && entry.senderId != 'me' && !await _confirm('编辑 AI 回复',
-        '修改 AI 消息只影响本机历史与以后发送给模型的上下文，不会改变已经生成的后续消息。确定继续吗？')) return;
-      widget.controller.editMessage(thread, entry.id, result);
+          TextButton(onPressed: () => Navigator.pop(ctx,'save'), child: const Text('只保存')),
+          if (entry.senderId == 'me' && widget.friend != null)
+            FilledButton(onPressed: () => Navigator.pop(ctx,'resend'),
+              child: const Text('编辑并重发')),
+        ]));
+      if (!mounted || action == null || tc.text.trim().isEmpty ||
+          tc.text.trim() == entry.text.trim()) return;
+      final laterUserExists = widget.controller.threadMessages(thread).any((m) =>
+          m.senderId == 'me' && m.createdAt.isAfter(entry.createdAt));
+      if (laterUserExists && entry.senderId == 'me' && !await _confirm('修改较早的消息',
+        '修改此条消息会移除之后的本地消息与回复，以保持上下文一致。继续吗？')) return;
+      if (widget.controller.busy.contains(thread)) widget.controller.stop(thread);
+      if (action == 'resend' && entry.senderId == 'me' && widget.friend != null) {
+        final c = widget.controller.character(widget.friend!.id);
+        if (c == null) return;
+        final error = await widget.controller.editAndResendPrivate(c,entry.id,tc.text);
+        if (mounted && error != null) uiError(context,error);
+      } else {
+        widget.controller.editMessage(thread, entry.id, tc.text);
+      }
     } finally { tc.dispose(); }
   }
 
@@ -375,6 +387,24 @@ class _ChatScreenState extends State<ChatScreen> {
               onPressed: _pickImage),
             if (widget.friend != null) IconButton(tooltip: '切换模型',
               onPressed: _chooseModel, icon: const Icon(Icons.tune, size: 21)),
+            PopupMenuButton<String>(tooltip: '设置输出格式',
+              onSelected: (value) => widget.controller.setThreadFormat(thread,value),
+              itemBuilder: (_) => [
+                for (final option in const <String,String>{
+                  'auto':'自动按用户要求','markdown':'Markdown / 表格 / 代码块',
+                  'json':'严格 JSON','plain':'纯文本',
+                }.entries) PopupMenuItem(value:option.key,child:Row(children:[
+                  Icon(widget.controller.formatFor(thread)==option.key
+                    ? Icons.check_circle : Icons.circle_outlined,size:18),
+                  const SizedBox(width:8),Text(option.value),
+                ])),
+              ],child: Padding(padding:const EdgeInsets.symmetric(horizontal:5),
+                child: Column(mainAxisSize:MainAxisSize.min,children:[
+                  const Icon(Icons.data_object,size:23),
+                  Text(widget.controller.formatFor(thread)=='auto' ? '自动' :
+                    widget.controller.formatFor(thread).toUpperCase(),
+                    style:const TextStyle(fontSize:9)),
+                ]))),
             Expanded(child: TextField(controller: _input, focusNode: _focus, minLines: 1, maxLines: 4,
               textInputAction: TextInputAction.send,
               onSubmitted: (_) => _send(),
@@ -384,8 +414,9 @@ class _ChatScreenState extends State<ChatScreen> {
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
                   borderSide: BorderSide.none)))),
             const SizedBox(width: 8),
-            IconButton.filled(onPressed: running ? null : _send,
-              icon: const Icon(Icons.arrow_upward_rounded)),
+            IconButton.filled(tooltip: running ? '停止生成' : '发送',
+              onPressed: running ? () => widget.controller.stop(thread) : _send,
+              icon: Icon(running ? Icons.stop_rounded : Icons.arrow_upward_rounded)),
           ]))),
       ]));
   });
@@ -506,25 +537,20 @@ class ChatBubble extends StatelessWidget {
   }
 }
 
-/// Lightweight, dependency-free fenced code rendering; no HTML execution.
+/// Full GitHub-flavored Markdown, including tables and fenced code blocks.
+/// The renderer does not execute source code or arbitrary HTML.
 class ChatFormattedText extends StatelessWidget {
   final String text;
   final Color color;
   const ChatFormattedText({super.key, required this.text, required this.color});
   @override
   Widget build(BuildContext context) {
-    final parts = text.split('```');
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      for (var i = 0; i < parts.length; i++)
-        if (i.isOdd)
-          Container(margin: const EdgeInsets.symmetric(vertical: 5),
-            padding: const EdgeInsets.all(9),
-            decoration: BoxDecoration(color: Colors.black.withValues(alpha: .09),
-              borderRadius: BorderRadius.circular(7)),
-            child: SelectableText(parts[i].replaceFirst(RegExp(r'^\w+\n'), ''),
-              style: TextStyle(fontFamily: 'monospace', color: color, fontSize: 12)))
-        else if (parts[i].isNotEmpty)
-          SelectableText(parts[i], style: TextStyle(color: color)),
-    ]);
+    final theme=Theme.of(context);
+    return MarkdownBody(data:text,selectable:true,
+      styleSheet:MarkdownStyleSheet.fromTheme(theme).copyWith(
+        p: TextStyle(color:color,fontSize:15,height:1.35),
+        code:TextStyle(color:color,fontFamily:'monospace',fontSize:13),
+        blockquote:TextStyle(color:color.withValues(alpha:.85),fontSize:14),
+      ));
   }
 }

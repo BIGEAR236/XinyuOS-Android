@@ -1,0 +1,15 @@
+心屿 OS V3.6 — uiError 未定义编译错误修复
+
+原因：lib/ui_proactive.dart 调用了 uiError，函数定义在 lib/ui_shell.dart，原文件未导入该库。
+
+如何使用（GitHub Desktop）：
+1. 解压本压缩包。
+2. 将 lib/ui_proactive.dart 复制到你本地 GitHub 仓库的 lib/ui_proactive.dart（覆盖）。
+3. GitHub Desktop → Commit to main → Push origin。
+4. GitHub Actions 会重新运行；如果没有自动运行，手动 Run workflow。
+5. 此修复没有改动激活和密钥相关代码，不需要重新设置 Secret。
+
+亦可直接在 GitHub 编辑 lib/ui_proactive.dart：在 import 'ui_extras.dart'; 后加上 import 'ui_shell.dart'; 并提交。
+
+验证：已确认补丁文件导入了 uiError 的定义库；已运行仓库已有的 Python 静态检查。
+限制：当前环境无 Flutter SDK，无法运行 flutter analyze，因此尚不能保证下一次编译没有其他错误。

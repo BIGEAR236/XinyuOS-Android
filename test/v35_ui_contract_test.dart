@@ -13,7 +13,7 @@ void main() {
 
   test('拖动顺序可安全去重与补全，并能持久化', () {
     expect(normalizeDesktopOrder(['music', 'music', 'junk', 'chat']),
-      ['music', 'chat', 'api', 'settings', 'album', 'memo', 'diary']);
+      ['music', 'chat', 'api', 'settings', 'album', 'memo', 'diary', 'world', 'wallet', 'pet', 'shop', 'watch']);
     final app = AppData.initial();
     app.desktopOrder = ['settings', 'chat', 'music', 'api'];
     final decoded = AppData.fromJson(mapJson(jsonDecode(app.serialize())));
