@@ -41,10 +41,15 @@ class LocalData {
     final path = '${dest.path}/$filename';
     if (picked.path != null) {
       await File(picked.path!).copy(path);
-    } else if (picked.bytes != null) {
-      await File(path).writeAsBytes(picked.bytes!, flush: true);
     } else {
-      throw const FormatException('系统没有返回所选文件的内容');
+      // file_picker >=12 uses streaming reads instead of the removed .bytes field.
+      final output = File(path).openWrite();
+      try {
+        await output.addStream(picked.readAsByteStream());
+        await output.flush();
+      } finally {
+        await output.close();
+      }
     }
     return '$folder/$filename';
   }
@@ -57,16 +62,14 @@ class PersonaFileReader {
   static const maxTextLength = 26000;
 
   static Future<String?> pickAndRead() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom, allowedExtensions: ['txt', 'md', 'json', 'docx'],
-      withData: true);
-    if (result == null || result.files.isEmpty) return null;
-    final file = result.files.single;
-    if (file.size > maxFileBytes) {
+    final file = await FilePicker.pickFile(
+      type: FileType.custom, allowedExtensions: ['txt', 'md', 'json', 'docx']);
+    if (file == null) return null;
+    final fileSize = await file.length();
+    if (fileSize != null && fileSize > maxFileBytes) {
       throw const FormatException('人格文件最多支持 2 MB。请先精简后再导入。');
     }
-    final Uint8List bytes = file.bytes ??
-        await File(file.path!).readAsBytes();
+    final Uint8List bytes = await file.readAsBytes();
     if (bytes.length > maxFileBytes) {
       throw const FormatException('人格文件超过 2 MB 大小限制。');
     }

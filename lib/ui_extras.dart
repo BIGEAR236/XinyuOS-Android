@@ -88,13 +88,18 @@ class SettingsScreen extends StatelessWidget {
 
   Future<void> _wallpaper(BuildContext context) async {
     try {
-      final selected = await FilePicker.platform.pickFiles(type: FileType.image);
-      if (selected == null || selected.files.isEmpty) return;
-      final file = selected.files.single;
-      if (file.size > 12 * 1024 * 1024) {
+      final file = await FilePicker.pickFile(type: FileType.image);
+      if (file == null) return;
+      final fileSize = await file.length();
+      if (fileSize != null && fileSize > 12 * 1024 * 1024) {
         throw const FormatException('壁纸文件不能超过 12 MB。');
       }
       final path = await controller.local.copyIntoApp(file, 'wallpapers');
+      final savedFile = controller.local.resolve(path);
+      if (await savedFile.length() > 12 * 1024 * 1024) {
+        await savedFile.delete();
+        throw const FormatException('壁纸文件不能超过 12 MB。');
+      }
       controller.changeAppearance(wallpaper: path);
       if (context.mounted) uiError(context, '壁纸已更新');
     } catch (e) { if (context.mounted) uiError(context, e); }
@@ -163,16 +168,22 @@ class _MusicScreenState extends State<MusicScreen> {
     if (_importing) return;
     setState(() => _importing = true);
     try {
-      final picked = await FilePicker.platform.pickFiles(
-        type: FileType.audio, allowMultiple: true);
-      if (picked == null) return;
-      for (final f in picked.files) {
-        if (f.size > 80 * 1024 * 1024) {
+      final picked = await FilePicker.pickFiles(type: FileType.audio);
+      if (picked.isEmpty) return;
+      for (final f in picked) {
+        final fileSize = await f.length();
+        if (fileSize != null && fileSize > 80 * 1024 * 1024) {
           if (mounted) uiError(context, '${f.name} 超过 80 MB，已跳过。');
           continue;
         }
         try {
           final path = await widget.controller.local.copyIntoApp(f, 'music');
+          final savedFile = widget.controller.local.resolve(path);
+          if (await savedFile.length() > 80 * 1024 * 1024) {
+            await savedFile.delete();
+            if (mounted) uiError(context, '${f.name} 超过 80 MB，已跳过。');
+            continue;
+          }
           widget.controller.addTrack(LocalTrack(id: newId(),
             title: f.name, relativePath: path));
         } catch (e) { if (mounted) uiError(context, e); }

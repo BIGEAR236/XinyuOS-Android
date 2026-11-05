@@ -4,7 +4,7 @@ description: 心屿 OS — 跨平台 AI 虚拟手机（本地优先）
 version: 3.1.0+2
 
 environment:
-  sdk: '>=3.8.0 <4.0.0'
+  sdk: '>=3.10.0 <4.0.0'
 
 dependencies:
   flutter:
@@ -13,7 +13,7 @@ dependencies:
   android_id: ^0.5.2+1
   cryptography: ^2.9.0
   flutter_secure_storage: ^11.2.0
-  file_picker: '>=10.3.10 <11.0.0'
+  file_picker: ^13.3.2
   path_provider: '>=2.1.5 <2.1.6'
   just_audio: ^0.10.6
   archive: '>=4.0.9 <4.1.0'
