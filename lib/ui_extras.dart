@@ -1,4 +1,6 @@
 
+import 'dart:io';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
@@ -15,6 +17,21 @@ class MomentsTab extends StatefulWidget {
 
 class _MomentsTabState extends State<MomentsTab> {
   AppController get controller => widget.controller;
+
+  Future<void> _composeMine() async {
+    final input = TextEditingController();
+    try {
+      final value = await showDialog<String>(context: context,
+        builder: (ctx) => AlertDialog(title: const Text('发表我的朋友圈'),
+          content: TextField(controller: input, autofocus: true, maxLines: 6,
+            maxLength: 1500, decoration: const InputDecoration(hintText: '分享此刻的心情…')),
+          actions: [TextButton(onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, input.text.trim()),
+              child: const Text('发表'))]));
+      if (value != null && value.isNotEmpty) controller.addMyMoment(value);
+    } finally { input.dispose(); }
+  }
 
   Future<void> _showOptions() async {
     await showModalBottomSheet<void>(context: context,
@@ -147,12 +164,18 @@ class _MomentsTabState extends State<MomentsTab> {
     return Padding(padding: const EdgeInsets.fromLTRB(14, 14, 14, 18),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
-          if (c != null) CharacterAvatar(character: c,
+          if (m.characterId == 'me')
+            (controller.data.myAvatarPath.isNotEmpty &&
+              controller.local.resolve(controller.data.myAvatarPath).existsSync()
+              ? CircleAvatar(radius: 21, backgroundImage: FileImage(
+                  controller.local.resolve(controller.data.myAvatarPath)))
+              : const CircleAvatar(child: Icon(Icons.person)))
+          else if (c != null) CharacterAvatar(character: c,
             local: controller.local, radius: 21)
           else const CircleAvatar(child: Icon(Icons.smart_toy)),
           const SizedBox(width: 10),
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(c?.name ?? '已删除的角色',
+            Text(m.characterId == 'me' ? '我' : c?.name ?? '已删除的角色',
               style: const TextStyle(fontWeight: FontWeight.bold)),
             Text('${m.createdAt.month}-${m.createdAt.day} ${clockTime(m.createdAt)} · 虚拟动态',
               style: Theme.of(context).textTheme.labelSmall),
@@ -219,8 +242,13 @@ class _MomentsTabState extends State<MomentsTab> {
           itemBuilder: (context, index) => _momentCard(context,
             controller.data.moments[index]))),
     ]),
-    floatingActionButton: FloatingActionButton.extended(onPressed: _showOptions,
-      icon: const Icon(Icons.auto_awesome), label: const Text('生成动态')),
+    floatingActionButton: Column(mainAxisSize: MainAxisSize.min, children: [
+      FloatingActionButton.small(heroTag: 'write_moment', onPressed: _composeMine,
+        tooltip: '发表我的动态', child: const Icon(Icons.edit_outlined)),
+      const SizedBox(height: 9),
+      FloatingActionButton.extended(heroTag: 'ai_moment', onPressed: _showOptions,
+        icon: const Icon(Icons.auto_awesome), label: const Text('AI 动态')),
+    ]),
   );
 }
 
@@ -244,6 +272,21 @@ class SettingsScreen extends StatelessWidget {
       }
       controller.changeAppearance(wallpaper: path);
       if (context.mounted) uiError(context, '壁纸已更新');
+    } catch (e) { if (context.mounted) uiError(context, e); }
+  }
+
+  Future<void> _pickFont(BuildContext context) async {
+    try {
+      final picked = await FilePicker.pickFile(type: FileType.custom,
+        allowedExtensions: ['ttf', 'otf']);
+      if (picked == null) return;
+      final length = await picked.length();
+      if (length != null && length > 12 * 1024 * 1024) {
+        throw const FormatException('字体文件超过 12MB');
+      }
+      final path = await controller.local.copyIntoApp(picked, 'fonts');
+      controller.setFontPath(path);
+      if (context.mounted) uiError(context, '字体已导入，重新打开应用后生效');
     } catch (e) { if (context.mounted) uiError(context, e); }
   }
 
@@ -288,7 +331,7 @@ class SettingsScreen extends StatelessWidget {
         const ListTile(title: Text('自定义虚拟手机桌面图标'),
           subtitle: Text('点击以下应用可上传 PNG / JPG 等图片；不会修改安卓系统桌面图标。')),
         ...[('chat', '心屿通讯'), ('api', 'API 连接'),
-          ('music', '本地音乐'), ('settings', '设置')].map((item) {
+          ('music', '本地音乐'), ('settings', '设置'), ('album', '相册'), ('memo', '备忘录'), ('diary', '日记')].map((item) {
           final path = controller.data.desktopIcons[item.$1];
           final img = path == null || path.isEmpty ? null : controller.local.resolve(path);
           return ListTile(
@@ -323,6 +366,13 @@ class SettingsScreen extends StatelessWidget {
           child: Slider(min: .85, max: 1.35, divisions: 10,
             value: controller.data.fontScale.clamp(.85, 1.35).toDouble(),
             onChanged: (value) => controller.changeAppearance(scale: value))),
+        ListTile(leading: const Icon(Icons.font_download_outlined),
+          title: const Text('导入本地 TTF / OTF 字体'),
+          subtitle: Text(controller.data.fontPath.isEmpty ? '使用系统字体' : '已导入自定义字体；重启生效'),
+          onTap: () => _pickFont(context)),
+        if (controller.data.fontPath.isNotEmpty)
+          ListTile(title: const Text('恢复系统字体'),
+            onTap: () => controller.setFontPath('')),
         const Divider(),
         const ListTile(leading: Icon(Icons.lock_outline), title: Text('隐私和存储'),
           subtitle: Text('角色、普通聊天与动态保存在应用私有目录；'
@@ -352,11 +402,15 @@ class MiniPlayer extends StatelessWidget {
             leading: const Icon(Icons.music_note, size: 22),
             title: Text(music.trackTitle, maxLines: 1, overflow: TextOverflow.ellipsis,
               style: const TextStyle(fontSize: 13)),
-            trailing: IconButton(tooltip: music.playing ? '暂停' : '播放',
-              icon: Icon(music.playing ? Icons.pause : Icons.play_arrow),
-              onPressed: () => music.togglePause().catchError((Object e) {
-                if (context.mounted) uiError(context, e);
-              })),
+            trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+              IconButton(tooltip: music.playing ? '暂停' : '播放',
+                icon: Icon(music.playing ? Icons.pause : Icons.play_arrow),
+                onPressed: () => music.togglePause().catchError((Object e) {
+                  if (context.mounted) uiError(context, e);
+                })),
+              IconButton(tooltip: '关闭播放器', icon: const Icon(Icons.close, size: 18),
+                onPressed: music.clearTrack),
+            ]),
           )),
       );
     },
@@ -430,8 +484,13 @@ class _MusicScreenState extends State<MusicScreen> {
                     leading: const CircleAvatar(child: Icon(Icons.music_note)),
                     title: Text(track.title, maxLines: 1,
                       overflow: TextOverflow.ellipsis),
-                    trailing: Icon(current && music.playing
-                        ? Icons.pause_circle : Icons.play_circle_outline),
+                    trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(current && music.playing
+                          ? Icons.pause_circle : Icons.play_circle_outline),
+                      IconButton(tooltip: '从歌单删除',
+                        icon: const Icon(Icons.delete_outline, size: 19),
+                        onPressed: () => widget.controller.removeTrack(track.id)),
+                    ]),
                     onTap: () => _play(track),
                   );
                 })),

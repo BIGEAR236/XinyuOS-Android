@@ -1,0 +1,24 @@
+name: Check iOS Simulator Build (unsigned)
+on:
+  workflow_dispatch:
+jobs:
+  ios:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Generate native scaffolding
+        run: flutter create --platforms=android,ios --project-name=xinyu_os --org=com.xinyuos .
+      - run: python3 tools/prepare_platforms.py
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+      - name: Build for simulator, without device signing
+        run: flutter build ios --simulator --debug --no-codesign
+      - uses: actions/upload-artifact@v4
+        with:
+          name: XinyuOS-iOS-Simulator-App-NOT-IPA
+          path: build/ios/iphonesimulator/Runner.app

@@ -1,0 +1,29 @@
+name: 生成 Android 测试 APK（无需签名密钥）
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter create --platforms=android --project-name=xinyu_os --org=com.xinyuos .
+      - run: |
+          python3 tools/prepare_platforms.py
+          rm -f test/widget_test.dart
+      - run: flutter pub get
+      - run: flutter analyze --no-fatal-infos --no-fatal-warnings
+      - run: flutter test test/api_contract_test.dart test/activation_contract_test.dart
+      - run: flutter build apk --debug
+      - uses: actions/upload-artifact@v7
+        with:
+          name: XinyuOS-仅测试版.apk
+          path: build/app/outputs/flutter-apk/app-debug.apk
+          archive: false
+          if-no-files-found: error

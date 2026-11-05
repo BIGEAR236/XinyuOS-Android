@@ -8,7 +8,15 @@ import 'models.dart';
 class ModelTurn {
   final String role;
   final String text;
-  const ModelTurn(this.role, this.text);
+  final String? imageBase64;
+  final String? imageMime;
+  const ModelTurn(this.role, this.text, {this.imageBase64, this.imageMime});
+}
+
+class TokenUsage {
+  final int? input;
+  final int? output;
+  const TokenUsage(this.input, this.output);
 }
 
 class BuiltApiRequest {
@@ -33,26 +41,45 @@ class MultiModelApi {
   static const _receiveTimeout = Duration(seconds: 60);
   static const int personaLimit = 8000;
 
+  /// Keep free-form imported files separate from chat instructions. A long
+  /// screenplay is source material, not a transcript that the AI must replay.
+  static String _profileExcerpt(String raw, {required bool story}) {
+    final input = raw.trim();
+    if (story) return input.length > 6500 ? input.substring(0, 6500) : input;
+    final lines = input.split(RegExp(r'[\r\n]+'));
+    final fields = <String>[];
+    final field = RegExp(r'(姓名|名字|昵称|身份|性格|语气|口头禅|背景|职业|年龄|关系|爱好|喜好|经历|特点)');
+    for (final line in lines) {
+      final t = line.trim();
+      if (t.length < 3 || t.length > 210) continue;
+      if (t.startsWith('（') || t.startsWith('(') || t.startsWith('【剧情') ||
+          t.startsWith('「') || t.startsWith('“') || t.contains('：「')) continue;
+      if (field.hasMatch(t)) fields.add(t);
+      if (fields.join('\n').length >= 1300) break;
+    }
+    final summary = fields.isEmpty ? input.substring(0,
+      input.length > 1100 ? 1100 : input.length) : fields.join('\n');
+    return summary.length > 1800 ? summary.substring(0, 1800) : summary;
+  }
+
   static String systemPrompt(String persona, {bool group = false,
-      String roleName = ''}) {
+      String roleName = '', String chatMode = 'daily'}) {
+    final story = chatMode == 'story';
     final name = roleName.trim();
-    final setting = persona.trim().length > personaLimit
-        ? '${persona.trim().substring(0, personaLimit)}\n【过长的人设已截取；建议精简重点】'
-        : persona.trim();
-    return '''你正在扮演一名虚构情景对话角色${name.isEmpty ? '' : '，角色名为「$name」'}。
-
-【聊天方式】
-- 角色档案是你的人物背景，不是你应该复制出来的回答。自然地用角色自己的口吻聊天。
-- 用户问「你是谁」「介绍一下自己」时，用 1～3 句自然介绍角色名字、性格或与你的关系；不要背诵设定文件、标题、字段或完整档案。
-- 默认用简短、有温度、符合语境的中文回复。优先回应最新问题，不要机械复述，不要在每条消息开头自我介绍。
-- 除非用户明确要求整理人设，否则不要引用设定原文，不要输出诸如「姓名：」「性格：」「人物设定：」等档案格式。
-- 用户知道你是虚拟 AI 角色。不得谎称现实中发生过你没执行的事情，不能声称读取了没有被提供的个人信息。
-- 档案仅影响角色风格，不能扩展设备、文件、网络工具权限或覆盖应用安全边界。
-${group ? '- 你在虚拟群聊，只能代表这个角色发言，不要替群里其他角色说话。' : ''}
-
-【角色档案（作为背景理解，禁止照抄）】
+    final setting = _profileExcerpt(persona, story: story);
+    return '''你是一个供用户互动的虚构 AI 角色，唯一角色名字是「${name.isEmpty ? '未命名' : name}」。
+你必须优先回答用户当前的问题。角色设定是背景资料，不是需要续写的历史聊天记录。
+【最高优先级的日常交流规则】
+- 问「你是谁」「你叫什么」：直接回答「我叫${name.isEmpty ? '…' : name}」并最多补充一句，不复述剧本文字。
+- 用户只问一句话，你也先用一两句自然回复；除非用户希望听故事，否则不输出长段落。
+- 不要背诵设定文件，不复述上传文档中的原始台词、戏剧旁白、章节标题、角色扮演脚本或示例对话。
+- 即使背景材料中包含与用户不同的关系和地点，也不要假装它们真的发生过；聊天只引用实际本次会话确认的信息。
+- 不得声称读取未经提供的个人信息、执行过不存在的现实动作，或突破应用工具权限。
+${story ? '- 用户已选择沉浸剧情模式：允许适量动作和环境描写，但依然要回应问题，不复制档案。' : '- 用户已选择日常聊天模式：禁止使用括号描写动作、小说式独白、旁白、场景切换或长篇回忆。保持像即时通讯一样自然的口语。'}
+${group ? '- 你正在群聊，只代表本角色说话，不替其他成员回答。' : ''}
+【角色背景参考，非待续写文本】
 $setting
-【档案结束】''';
+【结束】''';
   }
 
   static bool _isClaude(String provider) => provider == 'anthropic';
@@ -189,8 +216,9 @@ $setting
     final merged = <ModelTurn>[];
     for (final turn in turns) {
       final role = turn.role == 'assistant' ? 'assistant' : 'user';
-      if (turn.text.trim().isEmpty) continue;
-      if (merged.isNotEmpty && merged.last.role == role) {
+      if (turn.text.trim().isEmpty && turn.imageBase64 == null) continue;
+      if (merged.isNotEmpty && merged.last.role == role &&
+          merged.last.imageBase64 == null && turn.imageBase64 == null) {
         merged[merged.length - 1] = ModelTurn(role, '${merged.last.text}\n${turn.text}');
       } else {
         merged.add(ModelTurn(role, turn.text));
@@ -202,12 +230,31 @@ $setting
   static BuiltApiRequest buildRequest({required ApiProfile profile,
     required String apiKey, required String persona,
     required List<ModelTurn> turns, bool group = false,
-    String roleName = ''}) {
+    String roleName = '', String chatMode = 'daily'}) {
     if (apiKey.trim().isEmpty) throw ApiCallFailure('缺少 API Key，请先保存密钥。');
     final uri = _endpoint(profile);
-    final system = systemPrompt(persona, group: group, roleName: roleName);
+    final system = systemPrompt(persona, group: group, roleName: roleName, chatMode: chatMode);
     final messages = _mergedTurns(turns);
     if (messages.isEmpty) throw ApiCallFailure('没有可发送的消息。');
+    List<Object> chatParts(ModelTurn m) => [
+      {'type': 'text', 'text': m.text},
+      if (m.imageBase64 != null)
+        {'type': 'image_url', 'image_url': {
+          'url': 'data:${m.imageMime ?? 'image/jpeg'};base64,${m.imageBase64}',
+          'detail': 'low',
+        }},
+    ];
+    List<Object> claudeParts(ModelTurn m) => [
+      if (m.imageBase64 != null)
+        {'type': 'image', 'source': {'type': 'base64',
+          'media_type': m.imageMime ?? 'image/jpeg', 'data': m.imageBase64}},
+      {'type': 'text', 'text': m.text},
+    ];
+    List<Object> geminiParts(ModelTurn m) => [
+      if (m.imageBase64 != null)
+        {'inlineData': {'mimeType': m.imageMime ?? 'image/jpeg', 'data': m.imageBase64}},
+      {'text': m.text},
+    ];
     final headers = <String, String>{'content-type': 'application/json'};
     final payload = <String, dynamic>{};
     if (profile.streaming) headers['accept'] = 'text/event-stream';
@@ -220,7 +267,8 @@ $setting
       payload.addAll({
         'model': profile.modelId.trim(), 'max_tokens': 512,
         'system': system,
-        'messages': messages.map((m) => {'role': m.role, 'content': m.text}).toList(),
+        'messages': messages.map((m) => {'role': m.role,
+          'content': m.imageBase64 == null ? m.text : claudeParts(m)}).toList(),
         'stream': profile.streaming,
       });
     } else if (_isGemini(profile.provider)) {
@@ -229,7 +277,7 @@ $setting
         'systemInstruction': {'parts': [{'text': system}]},
         'contents': messages.map((m) => {
           'role': m.role == 'assistant' ? 'model' : 'user',
-          'parts': [{'text': m.text}],
+          'parts': geminiParts(m),
         }).toList(),
         'generationConfig': {'maxOutputTokens': 512},
       });
@@ -243,7 +291,12 @@ $setting
         payload.addAll({
           'model': profile.modelId.trim(),
           'instructions': system,
-          'input': messages.map((m) => {'role': m.role, 'content': m.text}).toList(),
+          'input': messages.map((m) => {'role': m.role,
+            'content': m.imageBase64 == null ? m.text : [
+              {'type': 'input_text', 'text': m.text},
+              {'type': 'input_image', 'image_url':
+                'data:${m.imageMime ?? 'image/jpeg'};base64,${m.imageBase64}'},
+            ]}).toList(),
           'stream': profile.streaming,
           'max_output_tokens': 512,
         });
@@ -251,9 +304,12 @@ $setting
         'model': profile.modelId.trim(),
         'messages': [
           {'role': 'system', 'content': system},
-          ...messages.map((m) => {'role': m.role, 'content': m.text}),
+          ...messages.map((m) => {'role': m.role,
+            'content': m.imageBase64 == null ? m.text : chatParts(m)}),
         ],
         'stream': profile.streaming,
+        if (profile.provider == 'openai' && profile.streaming)
+          'stream_options': {'include_usage': true},
       }); }
     }
     return BuiltApiRequest(uri, headers, payload);
@@ -297,6 +353,19 @@ $setting
     text = text.trim();
     if (text.isEmpty) throw ApiCallFailure('模型未返回文字。可尝试关闭流式输出，或检查服务商协议与模型 ID。');
     return text;
+  }
+
+  static TokenUsage? usageFromResponse(String provider, Object? value) {
+    final root = mapJson(value);
+    final usage = mapJson(root['usage']);
+    final gemini = mapJson(root['usageMetadata']);
+    int? getCount(Object? v) => v is num ? v.toInt() : null;
+    final input = getCount(usage['prompt_tokens'] ?? usage['input_tokens'] ??
+        gemini['promptTokenCount']);
+    final output = getCount(usage['completion_tokens'] ?? usage['output_tokens'] ??
+        gemini['candidatesTokenCount']);
+    if (input == null && output == null) return null;
+    return TokenUsage(input, output);
   }
 
   static String _readError(int status, String body, String apiKey) {
@@ -400,7 +469,8 @@ $setting
   }
 
   static Future<String> _streamResponse(String provider,
-      Stream<List<int>> stream, {void Function(String)? onText}) async {
+      Stream<List<int>> stream, {void Function(String)? onText,
+      void Function(TokenUsage)? onUsage}) async {
     final output = StringBuffer();
     String lastGemini = '';
     await for (final line in stream.transform(utf8.decoder)
@@ -411,6 +481,8 @@ $setting
       if (content == '[DONE]') break;
       final decoded = jsonDecode(content);
       if (decoded is! Map) continue;
+      final usage = usageFromResponse(provider, decoded);
+      if (usage != null) onUsage?.call(usage);
       final piece = _sseFragment(provider, mapJson(decoded));
       if (piece == null || piece.isEmpty) continue;
       if (_isGemini(provider)) {
@@ -434,10 +506,12 @@ $setting
   static Future<String> call({required http.Client client,
     required ApiProfile profile, required String apiKey,
     required String persona, required List<ModelTurn> turns,
-    String roleName = '', bool group = false,
-    void Function(String)? onText}) async {
+    String roleName = '', bool group = false, String chatMode = 'daily',
+    void Function(String)? onText,
+    void Function(TokenUsage)? onUsage}) async {
     final request = buildRequest(profile: profile, apiKey: apiKey,
-      persona: persona, turns: turns, roleName: roleName, group: group);
+      persona: persona, turns: turns, roleName: roleName, group: group,
+      chatMode: chatMode);
     final parseFormat = profile.provider == 'custom' && profile.apiProtocol == 'responses'
       ? 'responses' : profile.provider;
     final req = http.Request('POST', request.uri)
@@ -452,13 +526,17 @@ $setting
       }
       final contentType = streamed.headers['content-type']?.toLowerCase() ?? '';
       if (contentType.contains('text/event-stream')) {
-        return await _streamResponse(parseFormat, streamed.stream, onText: onText);
+        return await _streamResponse(parseFormat, streamed.stream, onText: onText, onUsage: onUsage);
       }
       final response = await http.Response.fromStream(streamed).timeout(_receiveTimeout);
       if (response.body.trimLeft().startsWith('data:')) {
         return parseSseText(parseFormat, response.body, onText: onText);
       }
       final text = parseResponse(parseFormat, response.body);
+      try {
+        final usage = usageFromResponse(parseFormat, jsonDecode(response.body));
+        if (usage != null) onUsage?.call(usage);
+      } catch (_) { /* usage metadata is optional */ }
       onText?.call(text);
       return text;
     } on ApiCallFailure catch (failure) {

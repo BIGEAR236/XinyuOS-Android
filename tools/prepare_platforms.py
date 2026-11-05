@@ -14,6 +14,26 @@ if manifest.exists():
         text = text.replace('<application',
                             '    <uses-permission android:name="android.permission.INTERNET" />\n    <application', 1)
     text = re.sub(r'android:label="[^"]+"', 'android:label="心屿 OS"', text, count=1)
+    # Local, inexact event notifications; no exact-alarm permission required.
+    if 'android.permission.RECEIVE_BOOT_COMPLETED' not in text:
+        text = text.replace('<application',
+            '    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />\n    <application', 1)
+    if 'ScheduledNotificationReceiver' not in text:
+        receivers = '''
+        <receiver android:exported="false"
+            android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver" />
+        <receiver android:exported="false"
+            android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver">
+          <intent-filter>
+            <action android:name="android.intent.action.BOOT_COMPLETED" />
+            <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+            <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
+          </intent-filter>
+        </receiver>
+'''
+        text = text.replace('</application>', receivers + '\n    </application>', 1)
+
     for attr, val in [('android:allowBackup', 'false'),
                       ('android:usesCleartextTraffic', 'false'),
                       ('android:fullBackupContent', 'false')]:
@@ -28,6 +48,20 @@ if manifest.exists():
                             'minSdk = 24', source)
             source = source.replace('minSdkVersion flutter.minSdkVersion',
                                     'minSdkVersion 24')
+            # flutter_local_notifications uses java.time on old Android;
+            # enable core library desugaring in the generated project.
+            if name == 'build.gradle.kts':
+                if 'isCoreLibraryDesugaringEnabled' not in source:
+                    source = source.replace('compileOptions {',
+                        'compileOptions {\n        isCoreLibraryDesugaringEnabled = true', 1)
+                if 'coreLibraryDesugaring(' not in source:
+                    source += '\ndependencies {\n    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")\n}\n'
+            else:
+                if 'coreLibraryDesugaringEnabled' not in source:
+                    source = source.replace('compileOptions {',
+                        'compileOptions {\n        coreLibraryDesugaringEnabled true', 1)
+                if 'coreLibraryDesugaring ' not in source:
+                    source += "\ndependencies {\n    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.4'\n}\n"
             gradle.write_text(source, encoding='utf-8')
     print('✓ Android 已设置 HTTPS 网络权限、禁用明文通信和系统自动备份。')
 else:

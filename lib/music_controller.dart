@@ -20,6 +20,7 @@ class MusicController extends ChangeNotifier {
   bool get hasTrack => trackId != null;
 
   MusicController(this.local) {
+    unawaited(player.setLoopMode(LoopMode.one).catchError((Object _) {})); // repeat current song
     _subscription = player.playerStateStream.listen((_) => notifyListeners());
   }
 
@@ -42,6 +43,14 @@ class MusicController extends ChangeNotifier {
       notifyListeners();
       rethrow;
     }
+  }
+
+  Future<void> clearTrack() async {
+    await player.stop();
+    trackId = null;
+    trackTitle = '';
+    lastError = null;
+    notifyListeners();
   }
 
   Future<void> togglePause() async {

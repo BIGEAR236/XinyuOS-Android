@@ -1,14 +1,28 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'app_controller.dart';
 import 'activation_service.dart';
 import 'ui_activation.dart';
 import 'ui_shell.dart';
+import 'proactive_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   try {
+    // Local notifications are optional; failure must not block the whole app.
+    try { await ProactiveNotificationService.initialize(); } catch (_) {}
     final controller = await AppController.create();
+    if (controller.data.fontPath.isNotEmpty) {
+      try {
+        final file = controller.local.resolve(controller.data.fontPath);
+        if (await file.exists()) {
+          final loader = FontLoader('XinyuCustomFont')..addFont(
+            file.readAsBytes().then((bytes) => ByteData.sublistView(bytes)));
+          await loader.load();
+        }
+      } catch (_) { /* Invalid font: fall back to OS default. */ }
+    }
     final activation = await ActivationService.create();
     runApp(XinyuApp(controller: controller, activation: activation));
   } catch (error) {
@@ -37,10 +51,12 @@ class XinyuApp extends StatelessWidget {
         theme: ThemeData(useMaterial3: true,
           colorScheme: ColorScheme.fromSeed(seedColor: themeColor),
           scaffoldBackgroundColor: const Color(0xFFF9F7FB),
+          fontFamily: controller.data.fontPath.isNotEmpty ? 'XinyuCustomFont' : null,
           appBarTheme: const AppBarTheme(centerTitle: true)),
         darkTheme: ThemeData(useMaterial3: true,
           colorScheme: ColorScheme.fromSeed(seedColor: themeColor,
             brightness: Brightness.dark),
+          fontFamily: controller.data.fontPath.isNotEmpty ? 'XinyuCustomFont' : null,
           appBarTheme: const AppBarTheme(centerTitle: true)),
         builder: (context, child) => MediaQuery(
           data: MediaQuery.of(context).copyWith(

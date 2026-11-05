@@ -13,11 +13,11 @@ void main() {
 
   test('拖动顺序可安全去重与补全，并能持久化', () {
     expect(normalizeDesktopOrder(['music', 'music', 'junk', 'chat']),
-      ['music', 'chat', 'api', 'settings']);
+      ['music', 'chat', 'api', 'settings', 'album', 'memo', 'diary']);
     final app = AppData.initial();
     app.desktopOrder = ['settings', 'chat', 'music', 'api'];
     final decoded = AppData.fromJson(mapJson(jsonDecode(app.serialize())));
-    expect(decoded.desktopOrder, app.desktopOrder);
+    expect(decoded.desktopOrder, normalizeDesktopOrder(app.desktopOrder));
   });
 
   test('独立个人介绍、头像、模型、聊天背景序列化不损伤剧本或授权', () {

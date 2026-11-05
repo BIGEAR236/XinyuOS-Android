@@ -681,6 +681,11 @@ class CharacterChatBackgroundScreen extends StatelessWidget {
             TextButton(onPressed: () => controller.setCharacterBackground(c.id, ''),
               child: const Text('恢复默认背景')),
           const SizedBox(height: 15),
+          Text('背景可见度 ${(c.chatBackgroundOpacity * 100).round()}%'),
+          Slider(min: .05, max: 1.0, divisions: 19,
+            value: c.chatBackgroundOpacity,
+            onChanged: (value) => controller.setCharacterBackgroundOpacity(c.id, value)),
+          const SizedBox(height: 15),
           const Text('只修改与当前角色的私聊背景，不会更换虚拟手机壁纸，'
             '也不会影响其他 AI 好友。'),
         ]));
@@ -761,7 +766,8 @@ class _CharacterEditorScreenState extends State<CharacterEditorScreen> {
       friendIds: widget.initial?.friendIds ?? const [], avatarColor: _avatarColor,
       avatarPath: _avatarPath,
       intro: widget.initial?.intro ?? '',
-      chatBackgroundPath: widget.initial?.chatBackgroundPath ?? '');
+      chatBackgroundPath: widget.initial?.chatBackgroundPath ?? '',
+      chatBackgroundOpacity: widget.initial?.chatBackgroundOpacity ?? .38);
     widget.controller.upsertCharacter(c);
     Navigator.pop(context);
   }

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -132,6 +133,11 @@ class AppController extends ChangeNotifier {
     if (c == null) return;
     c.apiProfileId = profileId;
     _changed();
+  }
+
+  void setCharacterBackgroundOpacity(String id, double opacity) {
+    final c = character(id); if (c == null) return;
+    c.chatBackgroundOpacity = opacity.clamp(.05, 1.0).toDouble(); _changed();
   }
 
   void setCharacterBackground(String id, String relativePath) {
@@ -508,6 +514,59 @@ $context
   }
 
   void addTrack(LocalTrack t) { data.tracks.add(t); _changed(); }
+  Future<void> removeTrack(String trackId) async {
+    final match = data.tracks.where((t) => t.id == trackId).firstOrNull;
+    if (match == null) return;
+    if (music.trackId == trackId) await music.clearTrack();
+    data.tracks.removeWhere((t) => t.id == trackId);
+    _changed();
+    // Only delete app-managed file after removing it from saved playlist.
+    try { await local.resolve(match.relativePath).delete(); } catch (_) {}
+  }
+  void upsertNote(LocalNote note) {
+    final index = data.notes.indexWhere((n) => n.id == note.id);
+    if (index == -1) { data.notes.add(note); }
+    else { data.notes[index] = note; }
+    _changed();
+  }
+  void removeNote(String id) { data.notes.removeWhere((n) => n.id == id); _changed(); }
+  void addAlbumPhoto(String path) {
+    if (!data.albumPaths.contains(path)) {
+      data.albumPaths = [...data.albumPaths, path]; _changed();
+    }
+  }
+  Future<void> removeAlbumPhoto(String path) async {
+    data.albumPaths = data.albumPaths.where((v) => v != path).toList();
+    _changed();
+    try { await local.resolve(path).delete(); } catch (_) {}
+  }
+  void setMyAvatar(String path) { data.myAvatarPath = path; _changed(); }
+  void setFontPath(String path) { data.fontPath = path; _changed(); }
+  void addMyMoment(String text) {
+    final clean = text.trim();
+    if (clean.isEmpty || clean.length > 1500) return;
+    data.moments.insert(0, MomentEntry(id: newId(), characterId: 'me',
+      text: clean, createdAt: DateTime.now()));
+    _changed();
+  }
+  void sendLocalImage(String thread, String imagePath, {String text = ''}) {
+    if (busy.contains(thread)) return;
+    data.messages.add(ChatEntry(id: newId(), threadId: thread, senderId: 'me',
+      text: text.isEmpty ? '[图片]' : text, createdAt: DateTime.now(), imagePath: imagePath));
+    _changed();
+  }
+  void setMessageUsage(String thread, String messageId, int? input, int? output) {
+    final msg = data.messages.where((m) => m.threadId == thread && m.id == messageId).firstOrNull;
+    if (msg == null) return;
+    msg.inputTokens = input; msg.outputTokens = output; _changed();
+  }
+  void preserveEarlierMessage(String thread, String messageId, String newText) {
+    final m = data.messages.where((m) => m.threadId == thread && m.id == messageId).firstOrNull;
+    if (m == null || m.recalled || newText.trim().isEmpty) return;
+    m.previousVersions = [...m.previousVersions, m.text];
+    m.text = newText.trim(); m.editedAt = DateTime.now(); _changed();
+  }
+
 
   void setDesktopIcon(String id, String relativePath) {
     data.desktopIcons = {...data.desktopIcons, id: relativePath};
@@ -573,6 +632,7 @@ $context
     if (index < 0) return;
     final target = data.messages[index];
     if (target.senderId == 'system' || target.recalled) return;
+    target.previousVersions = [...target.previousVersions, target.text];
     target.text = newText.trim();
     target.editedAt = DateTime.now();
     // Editing an old user message invalidates generated replies after it.
@@ -628,15 +688,35 @@ $context
     busy.add(thread); _stopped.remove(thread); notifyListeners();
     final client = http.Client(); _clients[thread] = client;
     try {
+      TokenUsage? replyUsage;
       final reply = await MultiModelApi.call(client: client, profile: p,
         apiKey: key, persona: c.persona, roleName: c.name, turns: turns,
         chatMode: data.chatMode,
+        onUsage: (usage) => replyUsage = usage,
         onText: (text) { if (!_stopped.contains(thread)) _partial(thread,c.id,text); });
       if (!_stopped.contains(thread)) {
+        // Preserve earlier outputs as history of the new reply, not duplicate
+        // assistant turns that would contaminate subsequent context.
         final lastUserAt = prior.last.createdAt;
+        final earlier = data.messages.where((m) => m.threadId == thread &&
+          m.senderId == c.id && m.createdAt.isAfter(lastUserAt)).toList();
+        final history = <String>[
+          for (final old in earlier) ...old.previousVersions,
+          for (final old in earlier) old.text,
+        ];
         data.messages.removeWhere((m) => m.threadId == thread &&
-          m.createdAt.isAfter(lastUserAt));
+          m.senderId == c.id && m.createdAt.isAfter(lastUserAt));
         _addMessage(thread, c.id, reply);
+        if (history.isNotEmpty) {
+          threadMessages(thread).last.previousVersions = history;
+          _changed();
+        }
+        if (replyUsage != null) {
+          final m = threadMessages(thread).last;
+          m.inputTokens = replyUsage!.input;
+          m.outputTokens = replyUsage!.output;
+          _changed();
+        }
       }
       return null;
     } catch (e) { return _stopped.contains(thread) ? null : '$e'; }
@@ -667,13 +747,23 @@ $context
     final client = http.Client();
     _clients[thread] = client;
     try {
+      TokenUsage? replyUsage;
       final answer = await MultiModelApi.call(client: client, profile: p,
         apiKey: key, persona: c.persona, roleName: c.name,
         chatMode: data.chatMode, turns: _turns(thread, c.id),
+        onUsage: (usage) => replyUsage = usage,
         onText: (text) {
           if (!_stopped.contains(thread)) _partial(thread, c.id, text);
         });
-      if (!_stopped.contains(thread)) _addMessage(thread, c.id, answer);
+      if (!_stopped.contains(thread)) {
+        _addMessage(thread, c.id, answer);
+        if (replyUsage != null) {
+          final m = threadMessages(thread).last;
+          m.inputTokens = replyUsage!.input;
+          m.outputTokens = replyUsage!.output;
+          _changed();
+        }
+      }
       return null;
     } catch (e) {
       if (_stopped.contains(thread)) return null;
@@ -685,6 +775,56 @@ $context
       busy.remove(thread);
       _stopped.remove(thread);
       notifyListeners();
+    }
+  }
+
+  /// Send image to a vision-capable model using provider-specific input blocks.
+  /// Bytes never persist in JSON; only app-private file path is stored.
+  Future<String?> sendPrivateImage(Character c, String relativePath) async {
+    final thread = privateThread(c.id);
+    if (busy.contains(thread)) return '上一条回复尚未完成。';
+    final p = profile(c.apiProfileId);
+    if (p == null) return '请先绑定模型。';
+    final key = await getKey(p.id);
+    if (key == null || key.isEmpty) return '请先填写 API Key。';
+    final file = local.resolve(relativePath);
+    if (!await file.exists()) return '图片文件不存在。';
+    final size = await file.length();
+    if (size > 5 * 1024 * 1024) return '多模态发送只支持 5MB 以内的图片。';
+    final extension = relativePath.toLowerCase().split('.').last;
+    final mime = switch (extension) {
+      'png' => 'image/png', 'jpg' || 'jpeg' => 'image/jpeg',
+      'webp' => 'image/webp', 'gif' => 'image/gif',
+      _ => null,
+    };
+    if (mime == null) return '请使用 PNG、JPG、WEBP 或 GIF 图片。';
+    sendLocalImage(thread, relativePath, text: '请看看这张图片，结合我们的聊天自然回应。');
+    busy.add(thread); _stopped.remove(thread); notifyListeners();
+    final client = http.Client(); _clients[thread] = client;
+    try {
+      final turns = _turns(thread, c.id);
+      final bytes = await file.readAsBytes();
+      if (turns.isEmpty) return '图片消息上下文为空。';
+      turns[turns.length - 1] = ModelTurn('user', turns.last.text,
+        imageBase64: base64Encode(bytes), imageMime: mime);
+      TokenUsage? usage;
+      final answer = await MultiModelApi.call(client: client, profile: p,
+        apiKey: key, persona: c.persona, roleName: c.name,
+        chatMode: data.chatMode, turns: turns,
+        onUsage: (u) => usage = u,
+        onText: (text) { if (!_stopped.contains(thread)) _partial(thread,c.id,text); });
+      if (!_stopped.contains(thread)) {
+        _addMessage(thread, c.id, answer);
+        if (usage != null) {
+          final m = threadMessages(thread).last;
+          m.inputTokens = usage!.input; m.outputTokens = usage!.output; _changed();
+        }
+      }
+      return null;
+    } catch (e) { return _stopped.contains(thread) ? null : '$e'; }
+    finally {
+      client.close(); _clients.remove(thread); _clearPartial(thread);
+      busy.remove(thread); _stopped.remove(thread); notifyListeners();
     }
   }
 

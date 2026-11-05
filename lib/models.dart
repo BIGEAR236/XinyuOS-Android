@@ -73,12 +73,14 @@ class Character {
   String avatarPath; // app-private relative image path
   String intro; // short public profile description, not the persona file
   String chatBackgroundPath; // app-private image for this private conversation
+  double chatBackgroundOpacity;
   Character({required this.id, required this.name, required this.persona,
     this.apiProfileId, this.allowMoments = false,
     this.allowSocialInteractions = false, this.allowProactiveMessages = false,
     this.friendIds = const [],
     this.avatarColor = 0xFFB67BB8,
-    this.avatarPath = '', this.intro = '', this.chatBackgroundPath = ''});
+    this.avatarPath = '', this.intro = '', this.chatBackgroundPath = '',
+    this.chatBackgroundOpacity = .38});
   factory Character.fromJson(Map<String, dynamic> j) => Character(
     id: '${j['id'] ?? newId()}', name: '${j['name'] ?? '未命名'}',
     persona: '${j['persona'] ?? ''}', apiProfileId: j['apiProfileId'] as String?,
@@ -89,13 +91,15 @@ class Character {
     avatarColor: (j['avatarColor'] as num?)?.toInt() ?? 0xFFB67BB8,
     avatarPath: '${j['avatarPath'] ?? ''}',
     intro: '${j['intro'] ?? ''}',
-    chatBackgroundPath: '${j['chatBackgroundPath'] ?? ''}');
+    chatBackgroundPath: '${j['chatBackgroundPath'] ?? ''}',
+    chatBackgroundOpacity: ((j['chatBackgroundOpacity'] as num?)?.toDouble() ?? .38).clamp(.05,1.0).toDouble());
   Map<String, dynamic> toJson() => {'id': id, 'name': name, 'persona': persona,
     'apiProfileId': apiProfileId, 'allowMoments': allowMoments,
     'allowSocialInteractions': allowSocialInteractions,
     'allowProactiveMessages': allowProactiveMessages, 'friendIds': friendIds,
     'avatarColor': avatarColor, 'avatarPath': avatarPath,
-    'intro': intro, 'chatBackgroundPath': chatBackgroundPath};
+    'intro': intro, 'chatBackgroundPath': chatBackgroundPath,
+    'chatBackgroundOpacity': chatBackgroundOpacity};
 }
 
 class ChatGroup {
@@ -124,10 +128,15 @@ class ChatEntry {
   String? forwardedFrom;
   DateTime? editedAt;
   bool recalled;
+  String imagePath; // local attachment; no claim of model vision support
+  List<String> previousVersions; // local history of edits / regenerate alternatives
+  int? inputTokens;
+  int? outputTokens;
   ChatEntry({required this.id, required this.threadId, required this.senderId,
     required this.text, required this.createdAt, this.quotedText,
     this.quotedSender, this.forwardedFrom, this.editedAt,
-    this.recalled = false});
+    this.recalled = false, this.imagePath = '', this.previousVersions = const [],
+    this.inputTokens, this.outputTokens});
   factory ChatEntry.fromJson(Map<String, dynamic> j) => ChatEntry(
     id: '${j['id'] ?? newId()}', threadId: '${j['threadId'] ?? ''}',
     senderId: '${j['senderId'] ?? ''}', text: '${j['text'] ?? ''}',
@@ -136,12 +145,18 @@ class ChatEntry {
     quotedSender: j['quotedSender'] as String?,
     forwardedFrom: j['forwardedFrom'] as String?,
     editedAt: DateTime.tryParse('${j['editedAt'] ?? ''}'),
-    recalled: j['recalled'] == true);
+    recalled: j['recalled'] == true,
+    imagePath: '${j['imagePath'] ?? ''}',
+    previousVersions: (j['previousVersions'] as List? ?? []).map((v) => '$v').toList(),
+    inputTokens: (j['inputTokens'] as num?)?.toInt(),
+    outputTokens: (j['outputTokens'] as num?)?.toInt());
   Map<String, dynamic> toJson() => {'id': id, 'threadId': threadId,
     'senderId': senderId, 'text': text, 'createdAt': createdAt.toIso8601String(),
     'quotedText': quotedText, 'quotedSender': quotedSender,
     'forwardedFrom': forwardedFrom, 'editedAt': editedAt?.toIso8601String(),
-    'recalled': recalled};
+    'recalled': recalled, 'imagePath': imagePath,
+    'previousVersions': previousVersions,
+    'inputTokens': inputTokens, 'outputTokens': outputTokens};
 }
 
 class MomentComment {
@@ -180,6 +195,22 @@ class MomentEntry {
     'likedBy': likedBy, 'comments': comments.map((c) => c.toJson()).toList()};
 }
 
+class LocalNote {
+  String id;
+  String category; // memo or diary
+  String title;
+  String content;
+  DateTime updatedAt;
+  LocalNote({required this.id, required this.category, required this.title,
+    required this.content, required this.updatedAt});
+  factory LocalNote.fromJson(Map<String, dynamic> j) => LocalNote(
+    id: '${j['id'] ?? newId()}', category: '${j['category'] ?? 'memo'}',
+    title: '${j['title'] ?? ''}', content: '${j['content'] ?? ''}',
+    updatedAt: DateTime.tryParse('${j['updatedAt'] ?? ''}') ?? DateTime.now());
+  Map<String, dynamic> toJson() => {'id': id, 'category': category,
+    'title': title, 'content': content, 'updatedAt': updatedAt.toIso8601String()};
+}
+
 class LocalTrack {
   String id;
   String title;
@@ -215,7 +246,7 @@ class ProactiveEvent {
     'delivered': delivered, 'lastAttemptAt': lastAttemptAt?.toIso8601String()};
 }
 
-const List<String> defaultDesktopOrder = ['chat', 'api', 'music', 'settings'];
+const List<String> defaultDesktopOrder = ['chat', 'api', 'music', 'settings', 'album', 'memo', 'diary'];
 
 List<String> normalizeDesktopOrder(Object? raw) {
   final incoming = raw is List ? raw.map((v) => '$v') : const <String>[];
@@ -236,10 +267,14 @@ class AppData {
   List<ChatEntry> messages;
   List<MomentEntry> moments;
   List<LocalTrack> tracks;
+  List<LocalNote> notes;
+  List<String> albumPaths;
   bool darkMode;
   int themeColor;
   double fontScale;
   String wallpaperPath;
+  String myAvatarPath;
+  String fontPath;
   Map<String, String> desktopIcons;
   List<String> desktopOrder; // user-set icon position, preserved between launches
   bool autoMomentReplies; // only for user comments; defaults OFF
@@ -254,8 +289,9 @@ class AppData {
   List<ProactiveEvent> proactiveEvents;
   AppData({required this.profiles, required this.characters, required this.groups,
     required this.messages, required this.moments, required this.tracks,
+    this.notes = const [], this.albumPaths = const [],
     this.darkMode = false, this.themeColor = 0xFF8870B5, this.fontScale = 1,
-    this.wallpaperPath = '', this.desktopIcons = const {},
+    this.wallpaperPath = '', this.myAvatarPath = '', this.fontPath = '', this.desktopIcons = const {},
     this.desktopOrder = defaultDesktopOrder,
     this.autoMomentReplies = false, this.autoMomentInteractions = false,
     this.lastAutoInteractionAt, this.chatBubbleOpacity = 1.0,
@@ -272,7 +308,7 @@ class AppData {
         persona: '你叫阿泽，性格沉稳、理性，偶尔冷幽默。'
           '说话简洁，乐于倾听，不随意断言现实事实。', avatarColor: 0xFF8BA9D1),
     ], groups: [], messages: [], moments: [], tracks: [],
-    proactiveEvents: []);
+    proactiveEvents: [], notes: [], albumPaths: []);
   factory AppData.fromJson(Map<String, dynamic> j) => AppData(
     profiles: listJson(j['profiles']).map(ApiProfile.fromJson).toList(),
     characters: listJson(j['characters']).map(Character.fromJson).toList(),
@@ -280,10 +316,13 @@ class AppData {
     messages: listJson(j['messages']).map(ChatEntry.fromJson).toList(),
     moments: listJson(j['moments']).map(MomentEntry.fromJson).toList(),
     tracks: listJson(j['tracks']).map(LocalTrack.fromJson).toList(),
+    notes: listJson(j['notes']).map(LocalNote.fromJson).toList(),
+    albumPaths: (j['albumPaths'] as List? ?? []).map((e) => '$e').toList(),
     darkMode: j['darkMode'] == true,
     themeColor: (j['themeColor'] as num?)?.toInt() ?? 0xFF8870B5,
     fontScale: (j['fontScale'] as num?)?.toDouble() ?? 1,
     wallpaperPath: '${j['wallpaperPath'] ?? ''}',
+    myAvatarPath: '${j['myAvatarPath'] ?? ''}', fontPath: '${j['fontPath'] ?? ''}',
     desktopIcons: mapJson(j['desktopIcons']).map((k, v) => MapEntry(k, '$v')),
     desktopOrder: normalizeDesktopOrder(j['desktopOrder']),
     autoMomentReplies: j['autoMomentReplies'] == true,
@@ -298,15 +337,17 @@ class AppData {
     proactiveEvents: listJson(j['proactiveEvents'])
       .map(ProactiveEvent.fromJson).toList());
   Map<String, dynamic> toJson() => {
-    'version': 6,
+    'version': 7,
     'profiles': profiles.map((v) => v.toJson()).toList(),
     'characters': characters.map((v) => v.toJson()).toList(),
     'groups': groups.map((v) => v.toJson()).toList(),
     'messages': messages.map((v) => v.toJson()).toList(),
     'moments': moments.map((v) => v.toJson()).toList(),
     'tracks': tracks.map((v) => v.toJson()).toList(),
+    'notes': notes.map((n) => n.toJson()).toList(), 'albumPaths': albumPaths,
     'darkMode': darkMode, 'themeColor': themeColor,
     'fontScale': fontScale, 'wallpaperPath': wallpaperPath,
+    'myAvatarPath': myAvatarPath, 'fontPath': fontPath,
     'desktopIcons': desktopIcons, 'desktopOrder': desktopOrder,
     'autoMomentReplies': autoMomentReplies,
     'autoMomentInteractions': autoMomentInteractions,

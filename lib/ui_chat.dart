@@ -1,5 +1,7 @@
 import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -23,6 +25,7 @@ class ChatScreen extends StatefulWidget {
 
 class _ChatScreenState extends State<ChatScreen> {
   final _input = TextEditingController();
+  final _focus = FocusNode();
   final Set<String> _selected = {};
   ChatEntry? _quote;
   bool _selecting = false;
@@ -30,13 +33,13 @@ class _ChatScreenState extends State<ChatScreen> {
       : privateThread(widget.friend!.id);
 
   @override
-  void dispose() { _input.dispose(); super.dispose(); }
+  void dispose() { _input.dispose(); _focus.dispose(); super.dispose(); }
 
   Future<void> _send() async {
     final message = _input.text.trim();
     if (message.isEmpty || widget.controller.busy.contains(thread)) return;
     final quote = _quote;
-    _input.clear(); setState(() => _quote = null);
+    _input.clear(); _focus.unfocus(); setState(() => _quote = null);
     String? err;
     if (widget.group != null) {
       err = await widget.controller.sendGroup(widget.group!, message, quote: quote);
@@ -187,6 +190,57 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  Future<void> _pickImage() async {
+    try {
+      final file = await FilePicker.pickFile(type: FileType.image);
+      if (file == null) return;
+      final bytes = await file.length();
+      if (bytes != null && bytes > 5 * 1024 * 1024) {
+        if (mounted) uiError(context, '发送给模型的图片不能超过 5MB'); return;
+      }
+      final path = await widget.controller.local.copyIntoApp(file, 'chat_images');
+      if (widget.friend == null) {
+        widget.controller.sendLocalImage(thread, path);
+        if (mounted) uiError(context, '群聊图片目前仅保存在本地，不调用多模态模型');
+      } else {
+        _focus.unfocus();
+        final c = widget.controller.character(widget.friend!.id);
+        if (c == null) return;
+        final err = await widget.controller.sendPrivateImage(c, path);
+        if (mounted && err != null) uiError(context, err);
+      }
+    } catch (e) { if (mounted) uiError(context, e); }
+  }
+
+  void _chooseModel() async {
+    final c = widget.friend == null ? null :
+      widget.controller.character(widget.friend!.id);
+    if (c == null) return;
+    final next = await showModalBottomSheet<String>(context: context,
+      showDragHandle: true, builder: (ctx) => SafeArea(child: ListView(
+        shrinkWrap: true, children: [
+          const ListTile(title: Text('切换当前好友模型'), subtitle: Text('切换后下条消息生效')),
+          ...widget.controller.data.profiles.map((p) => RadioListTile<String>(
+            title: Text(p.label), subtitle: Text(p.modelId),
+            value: p.id, groupValue: c.apiProfileId,
+            onChanged: (v) => Navigator.pop(ctx, v))),
+        ])));
+    if (next != null) widget.controller.bindCharacterModel(c.id, next);
+  }
+
+  Future<void> _showVersions(ChatEntry entry) async {
+    if (entry.previousVersions.isEmpty) return;
+    await showModalBottomSheet<void>(context: context, showDragHandle: true,
+      isScrollControlled: true, builder: (ctx) => SafeArea(child: SizedBox(
+        height: MediaQuery.sizeOf(ctx).height * .55,
+        child: ListView(children: [
+          const ListTile(title: Text('历史版本（本地保留）')),
+          for (var i = 0; i < entry.previousVersions.length; i++)
+            ListTile(title: Text('版本 ${i + 1}'), subtitle: SelectableText(
+              entry.previousVersions[i]), isThreeLine: true),
+        ]))));
+  }
+
   Future<void> _groupSettings() async {
     final group = widget.group;
     if (group == null) return;
@@ -267,7 +321,7 @@ class _ChatScreenState extends State<ChatScreen> {
         Expanded(child: Stack(fit: StackFit.expand, children: [
           if (c != null && c.chatBackgroundPath.isNotEmpty &&
               widget.controller.local.resolve(c.chatBackgroundPath).existsSync())
-            Opacity(opacity: .38, child: Image.file(
+            Opacity(opacity: c.chatBackgroundOpacity, child: Image.file(
               File(widget.controller.local.resolve(c.chatBackgroundPath).path),
               fit: BoxFit.cover)),
           messages.isEmpty && !running
@@ -293,7 +347,12 @@ class _ChatScreenState extends State<ChatScreen> {
               return ChatBubble(entry: item, controller: widget.controller,
                 groupChat: group != null, selected: _selected.contains(item.id),
                 selectionMode: _selecting,
-                onAction: _action, onTap: _selecting ? (e) => setState(() {
+                onAction: _action, onEdit: _edit,
+                onRegenerate: widget.friend != null &&
+                  messages.lastWhere((m) => m.senderId == widget.friend!.id,
+                    orElse: () => item).id == item.id ? _regenerate : null,
+                onVersions: _showVersions,
+                onTap: _selecting ? (e) => setState(() {
                   if (_selected.contains(e.id)) { _selected.remove(e.id); }
                   else { _selected.add(e.id); }
                 }) : null);
@@ -312,7 +371,11 @@ class _ChatScreenState extends State<ChatScreen> {
           color: scheme.surface,
           padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
           child: Row(children: [
-            Expanded(child: TextField(controller: _input, minLines: 1, maxLines: 4,
+            IconButton(tooltip: '发送本地图片', icon: const Icon(Icons.add_photo_alternate_outlined),
+              onPressed: _pickImage),
+            if (widget.friend != null) IconButton(tooltip: '切换模型',
+              onPressed: _chooseModel, icon: const Icon(Icons.tune, size: 21)),
+            Expanded(child: TextField(controller: _input, focusNode: _focus, minLines: 1, maxLines: 4,
               textInputAction: TextInputAction.send,
               onSubmitted: (_) => _send(),
               decoration: InputDecoration(hintText: '输入消息', filled: true,
@@ -337,9 +400,13 @@ class ChatBubble extends StatelessWidget {
   final bool selectionMode;
   final void Function(ChatEntry)? onAction;
   final void Function(ChatEntry)? onTap;
+  final Future<void> Function(ChatEntry)? onEdit;
+  final Future<void> Function()? onRegenerate;
+  final Future<void> Function(ChatEntry)? onVersions;
   const ChatBubble({super.key, required this.entry, required this.controller,
     this.groupChat = false, this.streaming = false, this.selected = false,
-    this.selectionMode = false, this.onAction, this.onTap});
+    this.selectionMode = false, this.onAction, this.onTap,
+    this.onEdit, this.onRegenerate, this.onVersions});
 
   @override
   Widget build(BuildContext context) {
@@ -353,62 +420,111 @@ class ChatBubble extends StatelessWidget {
       controller.data.aiBubbleColor);
     final color = ThemeData.estimateBrightnessForColor(bubbleColor) == Brightness.light
       ? Colors.black87 : Colors.white;
-    return Padding(padding: const EdgeInsets.symmetric(vertical: 5),
+    final avatar = mine
+      ? (controller.data.myAvatarPath.isNotEmpty &&
+          controller.local.resolve(controller.data.myAvatarPath).existsSync()
+          ? CircleAvatar(radius: 13, backgroundImage: FileImage(
+              controller.local.resolve(controller.data.myAvatarPath)))
+          : const CircleAvatar(radius: 13, child: Icon(Icons.person, size: 15)))
+      : character == null ? const CircleAvatar(radius: 13,
+          child: Icon(Icons.smart_toy_outlined, size: 15))
+          : CharacterAvatar(character: character, local: controller.local, radius: 13);
+    return Padding(padding: const EdgeInsets.symmetric(vertical: 7),
       child: Row(mainAxisAlignment: mine ? MainAxisAlignment.end : MainAxisAlignment.start,
-        crossAxisAlignment: CrossAxisAlignment.start, children: [
-        if (selectionMode) ...[
-          Checkbox(value: selected, onChanged: (_) => onTap?.call(entry)),
-          const SizedBox(width: 4),
-        ],
-        if (!mine) ...[
-          character == null ? const CircleAvatar(radius: 18,
-            child: Icon(Icons.smart_toy_outlined, size: 18))
-            : CharacterAvatar(character: character, local: controller.local, radius: 18),
-          const SizedBox(width: 8),
-        ],
-        Flexible(child: Column(crossAxisAlignment: mine ? CrossAxisAlignment.end :
-          CrossAxisAlignment.start, children: [
-          if (!mine && groupChat)
-            Padding(padding: const EdgeInsets.only(bottom: 3),
-              child: Text(controller.displayName(entry.senderId),
-                style: Theme.of(context).textTheme.labelSmall)),
-          GestureDetector(onLongPress: onAction == null ? null : () => onAction!(entry),
-            onTap: onTap == null ? null : () => onTap!(entry),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              decoration: BoxDecoration(
-                border: selected ? Border.all(color: scheme.primary, width: 2) : null,
-                color: bubbleColor.withValues(alpha: controller.data.chatBubbleOpacity),
-                borderRadius: BorderRadius.circular(9)),
-              child: entry.recalled
-                ? Text('你撤回了一条消息（仅本机）', style: TextStyle(
-                    color: color.withValues(alpha: .75), fontSize: 13))
-                : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  if (entry.forwardedFrom != null)
-                    Padding(padding: const EdgeInsets.only(bottom: 5),
-                      child: Text('转发自 ${entry.forwardedFrom}', style: TextStyle(
-                        color: color.withValues(alpha: .7), fontSize: 11))),
-                  if (entry.quotedText != null)
-                    Container(margin: const EdgeInsets.only(bottom: 6),
-                      padding: const EdgeInsets.all(7),
-                      decoration: BoxDecoration(color: color.withValues(alpha: .08),
-                        borderRadius: BorderRadius.circular(5)),
-                      child: Text('${entry.quotedSender ?? '对方'}：${entry.quotedText}',
-                        maxLines: 3, overflow: TextOverflow.ellipsis,
-                        style: TextStyle(color: color.withValues(alpha: .8), fontSize: 12))),
-                  Text(entry.text, style: TextStyle(color: color)),
-                  if (entry.editedAt != null)
-                    Text('已编辑', style: TextStyle(fontSize: 10,
-                      color: color.withValues(alpha: .65))),
-                  if (streaming) const Padding(padding: EdgeInsets.only(top: 4),
-                    child: SizedBox(width: 8, height: 8,
-                      child: CircularProgressIndicator(strokeWidth: 1.3))),
-                ]))),
-          if (!streaming && controller.data.showChatTime)
-            Text(clockTime(entry.createdAt),
-              style: Theme.of(context).textTheme.labelSmall),
-        ])),
-        if (mine) const SizedBox(width: 5),
-      ]));
+        children: [
+          if (selectionMode) Checkbox(value: selected,
+            onChanged: (_) => onTap?.call(entry)),
+          Flexible(child: Column(crossAxisAlignment: mine
+            ? CrossAxisAlignment.end : CrossAxisAlignment.start, children: [
+            Row(mainAxisSize: MainAxisSize.min, children: [
+              avatar,
+              const SizedBox(width: 6),
+              Text(mine ? '我' : controller.displayName(entry.senderId),
+                style: Theme.of(context).textTheme.labelSmall),
+            ]),
+            const SizedBox(height: 5),
+            GestureDetector(onLongPress: onAction == null ? null : () => onAction!(entry),
+              onTap: onTap == null ? null : () => onTap!(entry),
+              child: Container(
+                constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width * .82),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  border: selected ? Border.all(color: scheme.primary, width: 2) : null,
+                  color: bubbleColor.withValues(alpha: controller.data.chatBubbleOpacity),
+                  borderRadius: BorderRadius.circular(15)),
+                child: entry.recalled
+                  ? Text('已撤回（仅本机）', style: TextStyle(color: color, fontSize: 12))
+                  : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    if (entry.quotedText != null)
+                      Text('${entry.quotedSender ?? '对方'}：${entry.quotedText}',
+                        maxLines: 2, overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontSize: 12, color: color.withValues(alpha: .7))),
+                    if (entry.imagePath.isNotEmpty &&
+                        controller.local.resolve(entry.imagePath).existsSync())
+                      ClipRRect(borderRadius: BorderRadius.circular(8),
+                        child: Image.file(controller.local.resolve(entry.imagePath),
+                          width: 210, fit: BoxFit.cover)),
+                    if (entry.text != '[图片]')
+                      ChatFormattedText(text: entry.text, color: color),
+                    if (entry.editedAt != null)
+                      Text('已编辑', style: TextStyle(fontSize: 10,
+                        color: color.withValues(alpha: .65))),
+                    if (streaming) const Padding(padding: EdgeInsets.only(top: 5),
+                      child: SizedBox(width: 9, height: 9,
+                        child: CircularProgressIndicator(strokeWidth: 1.5))),
+                  ]))),
+            if (!streaming && !selectionMode && !entry.recalled)
+              Row(mainAxisSize: MainAxisSize.min, children: [
+                if (entry.senderId != 'me' && onRegenerate != null)
+                  IconButton(tooltip: '重新生成', icon: const Icon(Icons.refresh, size: 17),
+                    visualDensity: VisualDensity.compact,
+                    constraints: const BoxConstraints(minWidth: 32, minHeight: 30),
+                    onPressed: onRegenerate),
+                if (onEdit != null)
+                  IconButton(tooltip: '直接编辑', icon: const Icon(Icons.edit_outlined, size: 16),
+                    visualDensity: VisualDensity.compact,
+                    constraints: const BoxConstraints(minWidth: 32, minHeight: 30),
+                    onPressed: () => onEdit!(entry)),
+                if (entry.previousVersions.isNotEmpty && onVersions != null)
+                  IconButton(tooltip: '查看之前的版本',
+                    icon: const Icon(Icons.history, size: 17),
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () => onVersions!(entry)),
+                if (onAction != null)
+                  IconButton(tooltip: '更多操作', icon: const Icon(Icons.more_horiz, size: 18),
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () => onAction!(entry)),
+                if (entry.inputTokens != null || entry.outputTokens != null)
+                  Text('↑${entry.inputTokens ?? '—'} ↓${entry.outputTokens ?? '—'} tokens',
+                    style: Theme.of(context).textTheme.labelSmall),
+                if (controller.data.showChatTime)
+                  Text(clockTime(entry.createdAt),
+                    style: Theme.of(context).textTheme.labelSmall),
+              ]),
+          ])),
+        ]));
+  }
+}
+
+/// Lightweight, dependency-free fenced code rendering; no HTML execution.
+class ChatFormattedText extends StatelessWidget {
+  final String text;
+  final Color color;
+  const ChatFormattedText({super.key, required this.text, required this.color});
+  @override
+  Widget build(BuildContext context) {
+    final parts = text.split('```');
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      for (var i = 0; i < parts.length; i++)
+        if (i.isOdd)
+          Container(margin: const EdgeInsets.symmetric(vertical: 5),
+            padding: const EdgeInsets.all(9),
+            decoration: BoxDecoration(color: Colors.black.withValues(alpha: .09),
+              borderRadius: BorderRadius.circular(7)),
+            child: SelectableText(parts[i].replaceFirst(RegExp(r'^\w+\n'), ''),
+              style: TextStyle(fontFamily: 'monospace', color: color, fontSize: 12)))
+        else if (parts[i].isNotEmpty)
+          SelectableText(parts[i], style: TextStyle(color: color)),
+    ]);
   }
 }

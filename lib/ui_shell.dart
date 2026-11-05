@@ -1,5 +1,7 @@
 import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
+
 import 'package:flutter/material.dart';
 
 import 'app_controller.dart';
@@ -9,6 +11,7 @@ import 'ui_chat.dart';
 import 'ui_contacts.dart';
 import 'ui_extras.dart';
 import 'ui_social_settings.dart';
+import 'ui_local_apps.dart';
 
 void uiError(BuildContext context, Object error) {
   if (!context.mounted) return;
@@ -69,6 +72,18 @@ class PhoneHomeScreen extends StatelessWidget {
         icon = Icons.music_note_rounded; title = '本地音乐';
         color = const Color(0xFFCA8DA6);
         destination = MusicScreen(controller: controller); break;
+      case 'album':
+        icon = Icons.photo_library_outlined; title = '相册';
+        color = const Color(0xFF95AFCD);
+        destination = LocalAlbumScreen(controller: controller); break;
+      case 'memo':
+        icon = Icons.note_alt_outlined; title = '备忘录';
+        color = const Color(0xFFE6C28B);
+        destination = LocalNotesScreen(controller: controller, category: 'memo'); break;
+      case 'diary':
+        icon = Icons.auto_stories_outlined; title = '日记';
+        color = const Color(0xFFC79CBB);
+        destination = LocalNotesScreen(controller: controller, category: 'diary'); break;
       default:
         icon = Icons.settings_rounded; title = '设置';
         color = const Color(0xFF8B8C98);
@@ -124,8 +139,8 @@ class PhoneHomeScreen extends StatelessWidget {
           const Spacer(),
           MiniPlayer(controller: controller),
           const SizedBox(height: 12),
-          ConstrainedBox(constraints: const BoxConstraints(maxWidth: 276),
-            child: Wrap(spacing: 20, runSpacing: 22,
+          ConstrainedBox(constraints: const BoxConstraints(maxWidth: 380),
+            child: Wrap(spacing: 8, runSpacing: 15,
               alignment: WrapAlignment.center,
               children: normalizeDesktopOrder(controller.data.desktopOrder)
                 .map((key) => _desktopTile(context, key)).toList())),
@@ -152,7 +167,7 @@ class HomeIcon extends StatelessWidget {
   @override
   Widget build(BuildContext context) => InkWell(onTap: onTap,
     borderRadius: BorderRadius.circular(14),
-    child: SizedBox(width: 94, child: Column(mainAxisSize: MainAxisSize.min,
+    child: SizedBox(width: 78, child: Column(mainAxisSize: MainAxisSize.min,
       children: [Container(height: 69, width: 69, decoration: BoxDecoration(
         color: color, borderRadius: BorderRadius.circular(19),
         boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 12)]),
@@ -315,10 +330,29 @@ class ChatListTab extends StatelessWidget {
 class MyTab extends StatelessWidget {
   final AppController controller;
   const MyTab({super.key, required this.controller});
+  Future<void> _avatar(BuildContext context) async {
+    try {
+      final picked = await FilePicker.pickFile(type: FileType.image);
+      if (picked == null) return;
+      final length = await picked.length();
+      if (length != null && length > 8 * 1024 * 1024) {
+        throw const FormatException('头像不能超过 8MB');
+      }
+      final path = await controller.local.copyIntoApp(picked, 'my_avatars');
+      controller.setMyAvatar(path);
+    } catch (e) { if (context.mounted) uiError(context, e); }
+  }
   @override
   Widget build(BuildContext context) => ListView(children: [
+    ListTile(leading: controller.data.myAvatarPath.isNotEmpty &&
+        controller.local.resolve(controller.data.myAvatarPath).existsSync()
+      ? CircleAvatar(backgroundImage: FileImage(
+          controller.local.resolve(controller.data.myAvatarPath)))
+      : const CircleAvatar(child: Icon(Icons.person)),
+      title: const Text('我的头像'), subtitle: const Text('从相册选择头像'),
+      trailing: const Icon(Icons.edit_outlined), onTap: () => _avatar(context)),
     const ListTile(leading: CircleAvatar(child: Icon(Icons.auto_awesome)),
-      title: Text('心屿 OS'), subtitle: Text('V3.5 · 本地优先 · AI 社交')),
+      title: Text('心屿 OS'), subtitle: Text('V3.6 · 本地优先 · AI 社交')),
     const Divider(),
     ListTile(leading: const Icon(Icons.tune_outlined), title: const Text('通讯设置'),
       subtitle: const Text('聊天、界面与显示、朋友权限、存储空间、主动关怀'),
