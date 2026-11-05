@@ -1,0 +1,61 @@
+name: 生成心屿OS正式签名 APK
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'lib/**'
+      - 'pubspec.yaml'
+      - 'test/**'
+      - 'tools/**'
+      - '.github/workflows/android-build.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  release-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v4
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Generate native Android project
+        run: flutter create --platforms=android --project-name=xinyu_os --org=com.xinyuos .
+      - name: Apply Android permissions and disable backup
+        run: |
+          python3 tools/prepare_platforms.py
+          # Flutter create may add a template test for a non-existent MyApp.
+          rm -f test/widget_test.dart
+      - name: Restore stable signing identity
+        env:
+          XY_RELEASE_SIGNING_BUNDLE: ${{ secrets.XY_RELEASE_SIGNING_BUNDLE }}
+        run: python3 tools/unpack_release_signing.py
+      - name: Configure Android release signing
+        run: python3 tools/configure_release_signing.py
+      - name: Install dependencies
+        run: flutter pub get
+      - name: Check Flutter and Dart
+        run: |
+          flutter analyze --no-fatal-infos --no-fatal-warnings
+          flutter test test/api_contract_test.dart test/activation_contract_test.dart
+      - name: Build real release APK
+        run: flutter build apk --release
+      - name: Verify resulting package
+        run: |
+          test -s build/app/outputs/flutter-apk/app-release.apk
+          sha256sum build/app/outputs/flutter-apk/app-release.apk
+          ls -lh build/app/outputs/flutter-apk/app-release.apk
+      - name: Make APK available for download
+        uses: actions/upload-artifact@v7
+        with:
+          name: XinyuOS-v3.1-release.apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
