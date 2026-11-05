@@ -53,7 +53,8 @@ void main() {
   test('Gemini: 原生 generateContent 格式', () {
     final req = MultiModelApi.buildRequest(profile: p('gemini'),
       apiKey: 'TEST_KEY', persona: '小满', turns: turns);
-    expect(req.uri.path, contains(':generateContent'));
+    expect(req.uri.path, contains(':streamGenerateContent'));
+    expect(req.uri.queryParameters['alt'], 'sse');
     expect(req.headers['x-goog-api-key'], 'TEST_KEY');
     expect(req.payload['systemInstruction'], isA<Map>());
     expect((req.payload['contents'] as List).first['role'], 'user');
@@ -82,6 +83,46 @@ void main() {
       throwsA(isA<ApiCallFailure>()));
   });
 
+  test('中转站 Base URL 和完整请求地址都可识别', () {
+    final relay = p('custom')
+      ..baseUrl = 'https://relay.example/v1'
+      ..modelId = 'model-from-relay';
+    final a = MultiModelApi.buildRequest(profile: relay, apiKey: 'KEY',
+      persona: '测试', roleName: '小满', turns: turns);
+    expect(a.uri.toString(), 'https://relay.example/v1/chat/completions');
+    expect(a.payload['stream'], true);
+    relay.baseUrl = 'https://relay.example/v1/chat/completions';
+    relay.authMode = 'x-api-key';
+    final b = MultiModelApi.buildRequest(profile: relay, apiKey: 'KEY',
+      persona: '测试', turns: turns);
+    expect(b.uri.toString(), 'https://relay.example/v1/chat/completions');
+    expect(b.headers['x-api-key'], 'KEY');
+    expect(b.headers.containsKey('Authorization'), false);
+  });
+
+  test('对话模式明确不照抄人格档案', () {
+    final prompt = MultiModelApi.systemPrompt('姓名：小满。性格：温柔。',
+      roleName: '小满');
+    expect(prompt, contains('不要背诵设定文件'));
+    expect(prompt, contains('小满'));
+  });
+
+  test('OpenAI 兼容 SSE 流解析', () {
+    const raw = 'data: {"choices":[{"delta":{"content":"你"}}]}\n\n'
+      'data: {"choices":[{"delta":{"content":"好！"}}]}\n\n'
+      'data: [DONE]\n';
+    final fragments = <String>[];
+    expect(MultiModelApi.parseSseText('custom', raw,
+      onText: fragments.add), '你好！');
+    expect(fragments, ['你', '你好！']);
+  });
+
+  test('Claude 流式内容可解析', () {
+    const raw = 'event: content_block_delta\n'
+      'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"你好"}}\n\n';
+    expect(MultiModelApi.parseSseText('anthropic', raw), '你好');
+  });
+
   test('角色、群成员及消息 JSON 往返持久化', () {
     final data = AppData.initial();
     data.groups.add(ChatGroup(id: 'g1', name: '朋友群',
@@ -93,3 +134,4 @@ void main() {
     expect(restored.messages.single.text, '晚上好');
   });
 }
+

@@ -42,7 +42,7 @@ class _ActivationScreenState extends State<ActivationScreen> {
           const Text('心屿 OS · 邀请制内测', style: TextStyle(
             fontSize: 24, fontWeight: FontWeight.w700)),
           const SizedBox(height: 12),
-          const Text('为了维护内测体验，请先激活本机。一个激活码仅对应一个设备。',
+          const Text('一个激活码仅对应一台设备。新版短码和旧版激活码都可以使用。',
             textAlign: TextAlign.center),
           const SizedBox(height: 26),
           Align(alignment: Alignment.centerLeft,
@@ -66,7 +66,17 @@ class _ActivationScreenState extends State<ActivationScreen> {
           TextField(controller: _code, maxLines: 3, minLines: 2,
             autocorrect: false, enableSuggestions: false,
             decoration: const InputDecoration(
-              border: OutlineInputBorder(), hintText: '粘贴邀请人提供的完整激活码')),
+              border: OutlineInputBorder(), hintText: '粘贴你收到的激活码（支持新版短码）')),
+          Align(alignment: Alignment.centerRight,
+            child: TextButton.icon(
+              icon: const Icon(Icons.content_paste_outlined),
+              label: const Text('一键从剪贴板粘贴'),
+              onPressed: () async {
+                final clipboard = await Clipboard.getData('text/plain');
+                if (!mounted) return;
+                setState(() => _code.text = clipboard?.text?.trim() ?? '');
+              },
+            )),
           if (_error != null) Padding(padding: const EdgeInsets.only(top: 12),
             child: Text(_error!, style: const TextStyle(color: Colors.red))),
           const SizedBox(height: 20),

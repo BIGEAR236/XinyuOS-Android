@@ -5,6 +5,24 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:xinyu_os/activation_service.dart';
 
 void main() {
+  test('短码 XY2 正确的公钥和设备绑定', () async {
+    const compact = 'XY2.AhI0q81WeO8BI0UAAAAAAAAAAQ.iMdHvPzpHIEmVIif0oSFIMEUyMlzKS5isQmt2VonF1Q489-rj9hR2VRqX7EWvimRbJlW45cFhF4x1sUSceaRAg';
+    final pieces = compact.split('.');
+    expect(pieces[0], 'XY2');
+    final pub = SimplePublicKey(base64Decode(ActivationService.publicKeyBase64),
+      type: KeyPairType.ed25519);
+    String padded(String value) =>
+      value + List.filled((4 - value.length % 4) % 4, '=').join();
+    final bytes = base64Url.decode(padded(pieces[1]));
+    expect(bytes.length, 19);
+    expect(bytes.first, 2);
+    expect(bytes.sublist(1, 11), [0x12, 0x34, 0xAB, 0xCD, 0x56,
+      0x78, 0xEF, 0x01, 0x23, 0x45]);
+    expect(await Ed25519().verify(utf8.encode('${pieces[0]}.${pieces[1]}'),
+      signature: Signature(base64Url.decode(padded(pieces[2])),
+        publicKey: pub)), true);
+  });
+
   test('内置公钥可验证内测激活签名测试向量', () async {
     // This fixture carries no secret private key.
     const body = 'eyJ2IjoxLCJkIjoiWFktMTIzNC1BQkNELTU2NzgtRUYwMS0yMzQ1IiwiaWQiOiJURVNUVkVDVE9SIiwiZXhwIjowfQ';

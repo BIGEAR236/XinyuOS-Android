@@ -23,7 +23,7 @@ const presets = [
   ProviderPreset('gemini', 'Gemini', 'https://generativelanguage.googleapis.com/v1beta', 'gemini-2.5-flash'),
   ProviderPreset('deepseek', 'DeepSeek', 'https://api.deepseek.com', 'deepseek-chat'),
   ProviderPreset('glm', 'GLM / 智谱', 'https://open.bigmodel.cn/api/paas/v4', 'glm-4.5'),
-  ProviderPreset('custom', '自定义兼容接口', 'https://example.com/v1', 'model-id'),
+  ProviderPreset('custom', '中转站 / OpenAI 兼容', 'https://example.com/v1', 'model-id'),
 ];
 ProviderPreset providerFor(String id) => presets.firstWhere(
   (p) => p.id == id, orElse: () => presets.last,
@@ -37,18 +37,23 @@ class ApiProfile {
   String modelId;
   String anthropicVersion;
   String workspaceId;
+  bool streaming;
+  String authMode; // bearer / x-api-key (custom relays only)
   ApiProfile({required this.id, required this.label, required this.provider,
     required this.baseUrl, required this.modelId, this.anthropicVersion = '2026-10-21',
-    this.workspaceId = ''});
+    this.workspaceId = '', this.streaming = true, this.authMode = 'bearer'});
   factory ApiProfile.fromJson(Map<String, dynamic> j) => ApiProfile(
     id: '${j['id'] ?? newId()}', label: '${j['label'] ?? ''}',
     provider: '${j['provider'] ?? 'custom'}',
     baseUrl: '${j['baseUrl'] ?? ''}', modelId: '${j['modelId'] ?? ''}',
     anthropicVersion: '${j['anthropicVersion'] ?? '2026-10-21'}',
-    workspaceId: '${j['workspaceId'] ?? ''}');
+    workspaceId: '${j['workspaceId'] ?? ''}',
+    streaming: j['streaming'] != false,
+    authMode: '${j['authMode'] ?? 'bearer'}');
   Map<String, dynamic> toJson() => {'id': id, 'label': label,
     'provider': provider, 'baseUrl': baseUrl, 'modelId': modelId,
-    'anthropicVersion': anthropicVersion, 'workspaceId': workspaceId}; // API Key NEVER written here.
+    'anthropicVersion': anthropicVersion, 'workspaceId': workspaceId,
+    'streaming': streaming, 'authMode': authMode}; // API Key NEVER written here.
 }
 
 class Character {
@@ -58,16 +63,19 @@ class Character {
   String? apiProfileId;
   bool allowMoments;
   int avatarColor;
+  String avatarPath; // app-private relative image path
   Character({required this.id, required this.name, required this.persona,
-    this.apiProfileId, this.allowMoments = false, this.avatarColor = 0xFFB67BB8});
+    this.apiProfileId, this.allowMoments = false, this.avatarColor = 0xFFB67BB8,
+    this.avatarPath = ''});
   factory Character.fromJson(Map<String, dynamic> j) => Character(
     id: '${j['id'] ?? newId()}', name: '${j['name'] ?? '未命名'}',
     persona: '${j['persona'] ?? ''}', apiProfileId: j['apiProfileId'] as String?,
     allowMoments: j['allowMoments'] == true,
-    avatarColor: (j['avatarColor'] as num?)?.toInt() ?? 0xFFB67BB8);
+    avatarColor: (j['avatarColor'] as num?)?.toInt() ?? 0xFFB67BB8,
+    avatarPath: '${j['avatarPath'] ?? ''}');
   Map<String, dynamic> toJson() => {'id': id, 'name': name, 'persona': persona,
     'apiProfileId': apiProfileId, 'allowMoments': allowMoments,
-    'avatarColor': avatarColor};
+    'avatarColor': avatarColor, 'avatarPath': avatarPath};
 }
 
 class ChatGroup {
@@ -139,10 +147,11 @@ class AppData {
   int themeColor;
   double fontScale;
   String wallpaperPath;
+  Map<String, String> desktopIcons;
   AppData({required this.profiles, required this.characters, required this.groups,
     required this.messages, required this.moments, required this.tracks,
     this.darkMode = false, this.themeColor = 0xFF8870B5, this.fontScale = 1,
-    this.wallpaperPath = ''});
+    this.wallpaperPath = '', this.desktopIcons = const {}});
   factory AppData.initial() => AppData(
     profiles: [], characters: [
       Character(id: 'sample_xiaoman', name: '小满',
@@ -163,7 +172,8 @@ class AppData {
     darkMode: j['darkMode'] == true,
     themeColor: (j['themeColor'] as num?)?.toInt() ?? 0xFF8870B5,
     fontScale: (j['fontScale'] as num?)?.toDouble() ?? 1,
-    wallpaperPath: '${j['wallpaperPath'] ?? ''}');
+    wallpaperPath: '${j['wallpaperPath'] ?? ''}',
+    desktopIcons: mapJson(j['desktopIcons']).map((k, v) => MapEntry(k, '$v')));
   Map<String, dynamic> toJson() => {
     'version': 3,
     'profiles': profiles.map((v) => v.toJson()).toList(),
@@ -174,6 +184,7 @@ class AppData {
     'tracks': tracks.map((v) => v.toJson()).toList(),
     'darkMode': darkMode, 'themeColor': themeColor,
     'fontScale': fontScale, 'wallpaperPath': wallpaperPath,
+    'desktopIcons': desktopIcons,
   };
   String serialize() => jsonEncode(toJson());
 }

@@ -1,5 +1,9 @@
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
+import 'api_client.dart';
 import 'app_controller.dart';
 import 'local_data.dart';
 import 'models.dart';
@@ -50,6 +54,8 @@ class _ApiProfileEditorScreenState extends State<ApiProfileEditorScreen> {
   late final TextEditingController _anthropicVersion;
   late final TextEditingController _workspaceId;
   late String _provider;
+  late bool _streaming;
+  late String _authMode;
   late String _id;
   bool _testing = false;
   bool _saving = false;
@@ -62,6 +68,8 @@ class _ApiProfileEditorScreenState extends State<ApiProfileEditorScreen> {
     final initial = widget.initial;
     _id = initial?.id ?? newId();
     _provider = initial?.provider ?? 'deepseek';
+    _streaming = initial?.streaming ?? true;
+    _authMode = initial?.authMode ?? 'bearer';
     final sample = providerFor(_provider);
     _label = TextEditingController(text: initial?.label ?? sample.label);
     _base = TextEditingController(text: initial?.baseUrl ?? sample.baseUrl);
@@ -89,14 +97,18 @@ class _ApiProfileEditorScreenState extends State<ApiProfileEditorScreen> {
     label: _label.text.trim(), provider: _provider,
     baseUrl: _base.text.trim(), modelId: _model.text.trim(),
     anthropicVersion: _anthropicVersion.text.trim(),
-    workspaceId: _workspaceId.text.trim());
+    workspaceId: _workspaceId.text.trim(), streaming: _streaming,
+    authMode: _authMode);
 
   Future<void> _test() async {
     if (_testing) return;
     setState(() { _testing = true; _testResult = null; });
     try {
+      final clock = Stopwatch()..start();
       final answer = await widget.controller.testConnection(_formProfile(), _key.text.trim());
-      if (mounted) setState(() => _testResult = '连接成功，模型真实回复：\n$answer');
+      clock.stop();
+      if (mounted) setState(() => _testResult =
+        '连接成功 · ${clock.elapsedMilliseconds}ms\n模型真实回复：\n$answer');
     } catch (e) {
       if (mounted) setState(() => _testResult = '连接失败：\n$e');
     } finally {
@@ -147,11 +159,38 @@ class _ApiProfileEditorScreenState extends State<ApiProfileEditorScreen> {
       const SizedBox(height: 14),
       TextField(controller: _base, autocorrect: false,
         decoration: const InputDecoration(labelText: 'API Base URL',
-          border: OutlineInputBorder(), helperText: '仅支持 HTTPS；请只连接可信服务商')),
+          border: OutlineInputBorder(), helperText: '仅支持 HTTPS；请只连接可信服务商'),
+        onChanged: (_) => setState(() {})),
       const SizedBox(height: 14),
       TextField(controller: _model, autocorrect: false,
         decoration: const InputDecoration(labelText: '模型 ID',
           border: OutlineInputBorder(), helperText: '示例 ID 可能不是你的账号可用模型')),
+      if (_provider == 'custom') ...[
+        const SizedBox(height: 8),
+        const Text('中转站支持 OpenAI Chat Completions 的情况下，填写到 /v1，'
+          '也可以直接填写完整的 /chat/completions 地址。若站点只有 Responses 协议，'
+          '当前版本不兼容。请只使用可信站点：站点会收到密钥与聊天内容。',
+          style: TextStyle(fontSize: 12)),
+        const SizedBox(height: 12),
+        DropdownButtonFormField<String>(value: _authMode,
+          decoration: const InputDecoration(labelText: '中转站认证方式',
+            border: OutlineInputBorder()),
+          items: const [
+            DropdownMenuItem(value: 'bearer', child: Text('Authorization: Bearer（常用）')),
+            DropdownMenuItem(value: 'x-api-key', child: Text('x-api-key（部分中转站）')),
+          ], onChanged: (v) => setState(() => _authMode = v ?? 'bearer')),
+      ],
+      const SizedBox(height: 4),
+      SwitchListTile(contentPadding: EdgeInsets.zero,
+        title: const Text('边生成边显示（流式回复）'),
+        subtitle: const Text('大幅改善等待体验；少数中转站不兼容时可关闭'),
+        value: _streaming,
+        onChanged: (value) => setState(() => _streaming = value)),
+      Padding(padding: const EdgeInsets.only(bottom: 8),
+        child: Text(() {
+          try { return '请求路径：${MultiModelApi.previewEndpoint(_formProfile())}'; }
+          catch (_) { return '检查 Base URL 后会显示实际请求路径'; }
+        }(), style: const TextStyle(fontSize: 11, color: Colors.grey))),
       if (_provider == 'anthropic') ...[
         const SizedBox(height: 14),
         TextField(controller: _anthropicVersion,
@@ -199,7 +238,7 @@ class ContactsTab extends StatelessWidget {
         CharacterEditorScreen(controller: controller)))),
     const Divider(),
     ...controller.data.characters.map((c) => ListTile(
-      leading: CharacterAvatar(character: c), title: Text(c.name),
+      leading: CharacterAvatar(character: c, local: controller.local), title: Text(c.name),
       subtitle: Text(controller.profile(c.apiProfileId)?.label ?? '未绑定模型'),
       trailing: const Icon(Icons.chevron_right),
       onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) =>
@@ -219,7 +258,7 @@ class CharacterDetailScreen extends StatelessWidget {
       if (c == null) return const Scaffold(body: Center(child: Text('角色不存在')));
       return Scaffold(appBar: AppBar(title: Text(c.name)),
         body: ListView(children: [
-          const SizedBox(height: 20), Center(child: CharacterAvatar(character: c, radius: 45)),
+          const SizedBox(height: 20), Center(child: CharacterAvatar(character: c, local: controller.local, radius: 45)),
           Padding(padding: const EdgeInsets.all(22), child: Text(c.persona.isEmpty ?
             '还未填写人格内容' : c.persona,
             maxLines: 8, overflow: TextOverflow.ellipsis)),
@@ -255,6 +294,8 @@ class _CharacterEditorScreenState extends State<CharacterEditorScreen> {
   late final TextEditingController _persona;
   late String _boundProfile;
   late int _avatarColor;
+  late String _avatarPath;
+  bool _importingAvatar = false;
   late bool _canPost;
   bool _loadingFile = false;
   @override
@@ -265,6 +306,7 @@ class _CharacterEditorScreenState extends State<CharacterEditorScreen> {
     _persona = TextEditingController(text: c?.persona ?? '');
     _boundProfile = c?.apiProfileId ?? '';
     _avatarColor = c?.avatarColor ?? 0xFFB67BB8;
+    _avatarPath = c?.avatarPath ?? '';
     _canPost = c?.allowMoments ?? false;
   }
   @override
@@ -279,6 +321,27 @@ class _CharacterEditorScreenState extends State<CharacterEditorScreen> {
     finally { if (mounted) setState(() => _loadingFile = false); }
   }
 
+  Future<void> _chooseAvatar() async {
+    if (_importingAvatar) return;
+    setState(() => _importingAvatar = true);
+    try {
+      final file = await FilePicker.pickFile(type: FileType.image);
+      if (file == null) return;
+      final length = await file.length();
+      if (length != null && length > 8 * 1024 * 1024) {
+        throw const FormatException('头像图片不能超过 8MB。');
+      }
+      final relative = await widget.controller.local.copyIntoApp(file, 'avatars');
+      final saved = widget.controller.local.resolve(relative);
+      if (await saved.length() > 8 * 1024 * 1024) {
+        await saved.delete();
+        throw const FormatException('头像文件不能超过 8MB。');
+      }
+      if (mounted) setState(() => _avatarPath = relative);
+    } catch (e) { if (mounted) uiError(context, e); }
+    finally { if (mounted) setState(() => _importingAvatar = false); }
+  }
+
   void _save() {
     if (_name.text.trim().isEmpty || _persona.text.trim().isEmpty) {
       uiError(context, '请输入名字，并填写或导入人格内容。'); return;
@@ -286,7 +349,8 @@ class _CharacterEditorScreenState extends State<CharacterEditorScreen> {
     final c = Character(id: widget.initial?.id ?? newId(),
       name: _name.text.trim(), persona: _persona.text.trim(),
       apiProfileId: _boundProfile.isEmpty ? null : _boundProfile,
-      allowMoments: _canPost, avatarColor: _avatarColor);
+      allowMoments: _canPost, avatarColor: _avatarColor,
+      avatarPath: _avatarPath);
     widget.controller.upsertCharacter(c);
     Navigator.pop(context);
   }
@@ -326,7 +390,26 @@ class _CharacterEditorScreenState extends State<CharacterEditorScreen> {
               if (mounted) setState(() {});
             },
             icon: const Icon(Icons.add), label: const Text('新建 API 连接'))),
-        const Text('头像颜色', style: TextStyle(fontWeight: FontWeight.bold)),
+        const Text('角色头像', style: TextStyle(fontWeight: FontWeight.bold)),
+        const SizedBox(height: 10),
+        Row(children: [
+          if (_avatarPath.isNotEmpty &&
+              widget.controller.local.resolve(_avatarPath).existsSync())
+            ClipOval(child: Image.file(File(widget.controller.local.resolve(_avatarPath).path),
+              width: 58, height: 58, fit: BoxFit.cover))
+          else CircleAvatar(radius: 29, backgroundColor: Color(_avatarColor),
+            child: const Icon(Icons.person, color: Colors.white)),
+          const SizedBox(width: 12),
+          Expanded(child: OutlinedButton.icon(onPressed: _importingAvatar ? null : _chooseAvatar,
+            icon: const Icon(Icons.photo_library_outlined),
+            label: Text(_importingAvatar ? '正在导入…' : '从手机选择头像'))),
+          if (_avatarPath.isNotEmpty) IconButton(
+            tooltip: '移除自定义头像',
+            icon: const Icon(Icons.close),
+            onPressed: () => setState(() => _avatarPath = '')),
+        ]),
+        const SizedBox(height: 12),
+        const Text('备用头像颜色', style: TextStyle(fontWeight: FontWeight.bold)),
         const SizedBox(height: 10),
         Wrap(spacing: 10, children: [0xFFB67BB8, 0xFFF0A5A4, 0xFF8BA9D1,
           0xFF77B6A2, 0xFFDCAC72, 0xFFBAA0CA].map((v) => ChoiceChip(
@@ -377,7 +460,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
       const SizedBox(height: 18),
       const Text('选择群成员（至少两位）', style: TextStyle(fontWeight: FontWeight.bold)),
       ...widget.controller.data.characters.map((c) => CheckboxListTile(
-        secondary: CharacterAvatar(character: c),
+        secondary: CharacterAvatar(character: c, local: widget.controller.local),
         title: Text(c.name),
         subtitle: Text(widget.controller.profile(c.apiProfileId)?.modelId ?? '尚未配置 API'),
         value: _selected.contains(c.id), onChanged: (value) => setState(() {

@@ -1,9 +1,6 @@
-import 'dart:async';
-import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:just_audio/just_audio.dart';
 
 import 'app_controller.dart';
 import 'models.dart';
@@ -26,7 +23,7 @@ class MomentsTab extends StatelessWidget {
             '本版本不会后台自行发朋友圈。'),
           const SizedBox(height: 8),
           ...controller.data.characters.map((c) => ListTile(
-            leading: CharacterAvatar(character: c),
+            leading: CharacterAvatar(character: c, local: controller.local),
             title: Text(c.name),
             subtitle: Text(c.allowMoments ? '已授权生成朋友圈' : '尚未授权'),
             trailing: Switch(value: c.allowMoments,
@@ -61,7 +58,7 @@ class MomentsTab extends StatelessWidget {
             return Padding(padding: const EdgeInsets.all(16),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Row(children: [
-                  if (c != null) CharacterAvatar(character: c, radius: 19)
+                  if (c != null) CharacterAvatar(character: c, local: controller.local, radius: 19)
                   else const CircleAvatar(child: Icon(Icons.smart_toy)),
                   const SizedBox(width: 11),
                   Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -105,6 +102,25 @@ class SettingsScreen extends StatelessWidget {
     } catch (e) { if (context.mounted) uiError(context, e); }
   }
 
+  Future<void> _iconImage(BuildContext context, String id) async {
+    try {
+      final file = await FilePicker.pickFile(type: FileType.image);
+      if (file == null) return;
+      final length = await file.length();
+      if (length != null && length > 6 * 1024 * 1024) {
+        throw const FormatException('桌面图标图片不能超过 6MB。');
+      }
+      final relative = await controller.local.copyIntoApp(file, 'icons');
+      final saved = controller.local.resolve(relative);
+      if (await saved.length() > 6 * 1024 * 1024) {
+        await saved.delete();
+        throw const FormatException('桌面图标图片不能超过 6MB。');
+      }
+      controller.setDesktopIcon(id, relative);
+      if (context.mounted) uiError(context, '已更新桌面图标');
+    } catch (e) { if (context.mounted) uiError(context, e); }
+  }
+
   @override
   Widget build(BuildContext context) => AnimatedBuilder(animation: controller,
     builder: (context, _) => Scaffold(appBar: AppBar(title: const Text('系统设置')),
@@ -119,6 +135,26 @@ class SettingsScreen extends StatelessWidget {
         if (controller.data.wallpaperPath.isNotEmpty)
           ListTile(title: const Text('恢复默认壁纸'),
             onTap: () => controller.changeAppearance(wallpaper: '')),
+        const Divider(),
+        const ListTile(title: Text('自定义虚拟手机桌面图标'),
+          subtitle: Text('点击以下应用可上传 PNG / JPG 等图片；不会修改安卓系统桌面图标。')),
+        ...[('chat', '心屿通讯'), ('api', 'API 连接'),
+          ('music', '本地音乐'), ('settings', '设置')].map((item) {
+          final path = controller.data.desktopIcons[item.$1];
+          final img = path == null || path.isEmpty ? null : controller.local.resolve(path);
+          return ListTile(
+            leading: img != null && img.existsSync()
+                ? ClipRRect(borderRadius: BorderRadius.circular(8),
+                    child: Image.file(img, width: 39, height: 39, fit: BoxFit.cover))
+                : const Icon(Icons.apps_rounded),
+            title: Text(item.$2),
+            subtitle: const Text('更换桌面图标'),
+            trailing: img == null ? const Icon(Icons.chevron_right) :
+                IconButton(onPressed: () => controller.clearDesktopIcon(item.$1),
+                  tooltip: '恢复默认图标', icon: const Icon(Icons.restore)),
+            onTap: () => _iconImage(context, item.$1),
+          );
+        }),
         SwitchListTile(secondary: const Icon(Icons.dark_mode_outlined),
           title: const Text('深色模式'), value: controller.data.darkMode,
           onChanged: (value) => controller.changeAppearance(dark: value)),
@@ -149,6 +185,35 @@ class SettingsScreen extends StatelessWidget {
       ])));
 }
 
+/// Compact player stays mounted in chat/social routes. It reads the shared
+/// MusicController instead of creating a new AudioPlayer per page.
+class MiniPlayer extends StatelessWidget {
+  final AppController controller;
+  const MiniPlayer({super.key, required this.controller});
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: controller.music,
+    builder: (context, _) {
+      final music = controller.music;
+      if (!music.hasTrack) return const SizedBox.shrink();
+      return Container(
+        color: Theme.of(context).colorScheme.surfaceContainer,
+        child: SafeArea(top: false, bottom: false,
+          child: ListTile(dense: true,
+            leading: const Icon(Icons.music_note, size: 22),
+            title: Text(music.trackTitle, maxLines: 1, overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 13)),
+            trailing: IconButton(tooltip: music.playing ? '暂停' : '播放',
+              icon: Icon(music.playing ? Icons.pause : Icons.play_arrow),
+              onPressed: () => music.togglePause().catchError((Object e) {
+                if (context.mounted) uiError(context, e);
+              })),
+          )),
+      );
+    },
+  );
+}
+
 class MusicScreen extends StatefulWidget {
   final AppController controller;
   const MusicScreen({super.key, required this.controller});
@@ -157,12 +222,7 @@ class MusicScreen extends StatefulWidget {
 }
 
 class _MusicScreenState extends State<MusicScreen> {
-  final AudioPlayer _player = AudioPlayer();
-  String? _currentTrackId;
   bool _importing = false;
-
-  @override
-  void dispose() { unawaited(_player.dispose()); super.dispose(); }
 
   Future<void> _import() async {
     if (_importing) return;
@@ -170,22 +230,22 @@ class _MusicScreenState extends State<MusicScreen> {
     try {
       final picked = await FilePicker.pickFiles(type: FileType.audio);
       if (picked.isEmpty) return;
-      for (final f in picked) {
-        final fileSize = await f.length();
-        if (fileSize != null && fileSize > 80 * 1024 * 1024) {
-          if (mounted) uiError(context, '${f.name} 超过 80 MB，已跳过。');
+      for (final file in picked) {
+        final bytes = await file.length();
+        if (bytes != null && bytes > 80 * 1024 * 1024) {
+          if (mounted) uiError(context, '${file.name} 超过 80MB，已跳过');
           continue;
         }
         try {
-          final path = await widget.controller.local.copyIntoApp(f, 'music');
-          final savedFile = widget.controller.local.resolve(path);
-          if (await savedFile.length() > 80 * 1024 * 1024) {
-            await savedFile.delete();
-            if (mounted) uiError(context, '${f.name} 超过 80 MB，已跳过。');
+          final relative = await widget.controller.local.copyIntoApp(file, 'music');
+          final saved = widget.controller.local.resolve(relative);
+          if (await saved.length() > 80 * 1024 * 1024) {
+            await saved.delete();
+            if (mounted) uiError(context, '${file.name} 超过 80MB，已跳过');
             continue;
           }
-          widget.controller.addTrack(LocalTrack(id: newId(),
-            title: f.name, relativePath: path));
+          widget.controller.addTrack(LocalTrack(id: newId(), title: file.name,
+            relativePath: relative));
         } catch (e) { if (mounted) uiError(context, e); }
       }
     } catch (e) { if (mounted) uiError(context, e); }
@@ -193,58 +253,48 @@ class _MusicScreenState extends State<MusicScreen> {
   }
 
   Future<void> _play(LocalTrack track) async {
-    try {
-      final file = widget.controller.local.resolve(track.relativePath);
-      if (!await file.exists()) {
-        throw const FileSystemException('已导入的歌曲文件不存在');
-      }
-      if (_currentTrackId == track.id && _player.playing) {
-        await _player.pause(); return;
-      }
-      if (_currentTrackId != track.id) {
-        await _player.setFilePath(file.path);
-        setState(() => _currentTrackId = track.id);
-      }
-      unawaited(_player.play().catchError((Object error) {
-        if (mounted) uiError(context, error);
-      }));
-    } catch (e) { if (mounted) uiError(context, e); }
+    try { await widget.controller.music.toggleTrack(track); }
+    catch (e) { if (mounted) uiError(context, e); }
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('本地音乐'), actions: [
-      IconButton(tooltip: '导入歌曲', onPressed: _importing ? null : _import,
-        icon: const Icon(Icons.library_add_outlined))]),
-    body: AnimatedBuilder(animation: widget.controller, builder: (context, _) =>
-      Column(children: [
-        const ListTile(title: Text('我的歌单'),
-          subtitle: Text('歌曲复制到应用私有目录，不上传至服务器。')),
-        if (widget.controller.data.tracks.isEmpty)
-          const Expanded(child: Center(child: Text('暂无歌曲。点击右上角导入 MP3、M4A 等音频。')))
-        else Expanded(child: StreamBuilder<PlayerState>(
-          stream: _player.playerStateStream,
-          builder: (context, snapshot) => ListView(children:
-            widget.controller.data.tracks.map((track) => ListTile(
-              leading: const CircleAvatar(child: Icon(Icons.music_note)),
-              title: Text(track.title, maxLines: 1, overflow: TextOverflow.ellipsis),
-              trailing: Icon(_currentTrackId == track.id && _player.playing
-                ? Icons.pause_circle : Icons.play_circle_outline),
-              onTap: () => _play(track))).toList()))),
-        if (_currentTrackId != null)
-          StreamBuilder<PlayerState>(stream: _player.playerStateStream,
-            builder: (context, _) => ListTile(
-              leading: Icon(_player.playing ? Icons.graphic_eq : Icons.music_note),
-              title: Text(widget.controller.data.tracks
-                .where((t) => t.id == _currentTrackId)
-                .map((t) => t.title).firstOrNull ?? '本地播放'),
-              trailing: IconButton(onPressed: () async {
-                if (_player.playing) { await _player.pause(); }
-                else { unawaited(_player.play()); }
-              }, icon: Icon(_player.playing ? Icons.pause : Icons.play_arrow)))),
-      ])),
-    floatingActionButton: FloatingActionButton.extended(
-      onPressed: _importing ? null : _import, icon: const Icon(Icons.add),
-      label: Text(_importing ? '正在导入…' : '导入本地歌曲')),
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: Listenable.merge([widget.controller, widget.controller.music]),
+    builder: (context, _) {
+      final music = widget.controller.music;
+      final tracks = widget.controller.data.tracks;
+      return Scaffold(
+        appBar: AppBar(title: const Text('本地音乐'), actions: [
+          IconButton(tooltip: '导入歌曲', onPressed: _importing ? null : _import,
+            icon: const Icon(Icons.library_add_outlined)),
+        ]),
+        body: Column(children: [
+          const ListTile(title: Text('我的歌单'),
+            subtitle: Text('播放时可返回聊天页面继续收听。音乐不上传服务器。')),
+          Expanded(child: tracks.isEmpty
+            ? const Center(child: Text('还没有歌曲。点击右上角导入音乐。'))
+            : ListView.builder(itemCount: tracks.length,
+                itemBuilder: (context, index) {
+                  final track = tracks[index];
+                  final current = music.trackId == track.id;
+                  return ListTile(
+                    leading: const CircleAvatar(child: Icon(Icons.music_note)),
+                    title: Text(track.title, maxLines: 1,
+                      overflow: TextOverflow.ellipsis),
+                    trailing: Icon(current && music.playing
+                        ? Icons.pause_circle : Icons.play_circle_outline),
+                    onTap: () => _play(track),
+                  );
+                })),
+          MiniPlayer(controller: widget.controller),
+          if (music.lastError != null) Padding(
+            padding: const EdgeInsets.all(8), child: Text(music.lastError!,
+              style: const TextStyle(color: Colors.red))),
+        ]),
+        floatingActionButton: FloatingActionButton.extended(
+          onPressed: _importing ? null : _import,
+          icon: const Icon(Icons.add), label: Text(_importing ? '正在导入…' : '导入歌曲')),
+      );
+    },
   );
 }

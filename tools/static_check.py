@@ -37,8 +37,11 @@ assert 'replied >= group.maxReplies' in controller
 assert (base / 'lib/activation_service.dart').exists()
 assert (base / 'lib/ui_activation.dart').exists()
 activation = (base / 'lib/activation_service.dart').read_text('utf-8')
-assert 'Ed25519().verify' in activation and "payload['d'] != deviceCode" in activation
+assert 'Ed25519().verify' in activation and "pieces[0] != 'XY2'" in activation
 assert 'XinyuApp(controller: controller, activation: activation)' in (base / 'lib/main.dart').read_text('utf-8')
+assert (base / 'lib/music_controller.dart').exists()
+assert 'desktopIcons' in models and 'avatarPath' in models
+assert 'parseSseText' in api and 'onText' in api
 assert (base / '.github/workflows/android-build.yml').exists()
 assert (base / '.github/workflows/ios-simulator-build.yml').exists()
 print(f'PASS: {len(source_files)} 个 Dart 源码模块、依赖引用、密钥分离、HTTPS/重定向、')

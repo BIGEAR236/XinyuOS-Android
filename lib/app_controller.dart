@@ -7,18 +7,23 @@ import 'package:http/http.dart' as http;
 import 'api_client.dart';
 import 'local_data.dart';
 import 'models.dart';
+import 'music_controller.dart';
 
 class AppController extends ChangeNotifier {
   final LocalData local;
   final FlutterSecureStorage _keys = const FlutterSecureStorage();
   AppData data;
+  late final MusicController music;
+  final Map<String, String> partialReplies = {};
+  final Map<String, String> partialSenders = {};
+  final Map<String, DateTime> _lastPartialPaint = {};
   Future<void> _writes = Future<void>.value();
   final Set<String> busy = {};
   final Set<String> _stopped = {};
   final Map<String, http.Client> _clients = {};
   String? persistenceError;
 
-  AppController(this.local, this.data);
+  AppController(this.local, this.data) { music = MusicController(local); }
   static Future<AppController> create() async {
     final local = await LocalData.open();
     return AppController(local, await local.load());
@@ -84,6 +89,8 @@ class AppController extends ChangeNotifier {
       existing.modelId = p.modelId;
       existing.anthropicVersion = p.anthropicVersion;
       existing.workspaceId = p.workspaceId;
+      existing.streaming = p.streaming;
+      existing.authMode = p.authMode;
     }
     _changed();
   }
@@ -133,16 +140,44 @@ class AppController extends ChangeNotifier {
 
   void addTrack(LocalTrack t) { data.tracks.add(t); _changed(); }
 
+  void setDesktopIcon(String id, String relativePath) {
+    data.desktopIcons = {...data.desktopIcons, id: relativePath};
+    _changed();
+  }
+
+  void clearDesktopIcon(String id) {
+    data.desktopIcons = {...data.desktopIcons}..remove(id);
+    _changed();
+  }
+
+  void _partial(String thread, String sender, String text) {
+    partialReplies[thread] = text;
+    partialSenders[thread] = sender;
+    final now = DateTime.now();
+    final last = _lastPartialPaint[thread];
+    if (last == null || now.difference(last).inMilliseconds >= 90) {
+      _lastPartialPaint[thread] = now;
+      notifyListeners();
+    }
+  }
+
+  void _clearPartial(String thread) {
+    partialReplies.remove(thread);
+    partialSenders.remove(thread);
+    _lastPartialPaint.remove(thread);
+    notifyListeners();
+  }
+
   void stop(String threadId) {
     _stopped.add(threadId);
     _clients.remove(threadId)?.close();
-    notifyListeners();
+    _clearPartial(threadId);
   }
 
   List<ModelTurn> _turns(String threadId, String aiId, {bool group = false}) {
     final entries = threadMessages(threadId)
         .where((m) => m.senderId != 'system').toList();
-    final recent = entries.length > 20 ? entries.sublist(entries.length - 20) : entries;
+    final recent = entries.length > 12 ? entries.sublist(entries.length - 12) : entries;
     return recent.map((entry) => ModelTurn(
       entry.senderId == aiId ? 'assistant' : 'user',
       group ? '${displayName(entry.senderId)}：${entry.text}' : entry.text,
@@ -170,8 +205,11 @@ class AppController extends ChangeNotifier {
     _clients[thread] = client;
     try {
       final answer = await MultiModelApi.call(client: client, profile: p,
-        apiKey: key, persona: c.persona,
-        turns: _turns(thread, c.id));
+        apiKey: key, persona: c.persona, roleName: c.name,
+        turns: _turns(thread, c.id),
+        onText: (text) {
+          if (!_stopped.contains(thread)) _partial(thread, c.id, text);
+        });
       if (!_stopped.contains(thread)) _addMessage(thread, c.id, answer);
       return null;
     } catch (e) {
@@ -180,6 +218,7 @@ class AppController extends ChangeNotifier {
     } finally {
       client.close();
       _clients.remove(thread);
+      _clearPartial(thread);
       busy.remove(thread);
       _stopped.remove(thread);
       notifyListeners();
@@ -210,7 +249,11 @@ class AppController extends ChangeNotifier {
         try {
           final answer = await MultiModelApi.call(client: client,
             profile: p, apiKey: key, persona: c.persona,
-            turns: _turns(thread, c.id, group: true), group: true);
+            roleName: c.name,
+            turns: _turns(thread, c.id, group: true), group: true,
+            onText: (text) {
+              if (!_stopped.contains(thread)) _partial(thread, c.id, text);
+            });
           if (!_stopped.contains(thread)) {
             _addMessage(thread, c.id, answer);
             replied++;
@@ -219,12 +262,14 @@ class AppController extends ChangeNotifier {
           if (!_stopped.contains(thread)) failures.add('${c.name}: $e');
         } finally {
           client.close();
+          _clearPartial(thread);
           if (identical(_clients[thread], client)) _clients.remove(thread);
         }
       }
       return failures.isEmpty ? null : failures.join('\n');
     } finally {
       _clients.remove(thread)?.close();
+      _clearPartial(thread);
       busy.remove(thread);
       _stopped.remove(thread);
       notifyListeners();
@@ -244,7 +289,7 @@ class AppController extends ChangeNotifier {
     _clients[thread] = client;
     try {
       final text = await MultiModelApi.call(client: client,
-        profile: p, apiKey: key, persona: c.persona,
+        profile: p, apiKey: key, persona: c.persona, roleName: c.name,
         turns: [const ModelTurn('user',
           '请以当前角色第一人称写一条不超过 100 字的虚拟朋友圈动态。'
           '符合性格，不要冒充在现实中做过未经证实的事。只输出正文。')]);
@@ -264,6 +309,7 @@ class AppController extends ChangeNotifier {
   @override
   void dispose() {
     for (final client in _clients.values) { client.close(); }
+    music.dispose();
     super.dispose();
   }
 }

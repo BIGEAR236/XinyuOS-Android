@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'app_controller.dart';
 import 'models.dart';
+import 'local_data.dart';
 import 'ui_chat.dart';
 import 'ui_contacts.dart';
 import 'ui_extras.dart';
@@ -22,12 +23,25 @@ String clockTime(DateTime time) =>
 
 class CharacterAvatar extends StatelessWidget {
   final Character character;
+  final LocalData local;
   final double radius;
-  const CharacterAvatar({super.key, required this.character, this.radius = 23});
+  const CharacterAvatar({super.key, required this.character, required this.local,
+    this.radius = 23});
   @override
-  Widget build(BuildContext context) => CircleAvatar(
-    radius: radius, backgroundColor: Color(character.avatarColor),
-    child: Text(character.name.isNotEmpty ? String.fromCharCode(character.name.runes.first) : '?',
+  Widget build(BuildContext context) {
+    final source = character.avatarPath.isEmpty ? null :
+      local.resolve(character.avatarPath);
+    if (source != null && source.existsSync()) {
+      return ClipOval(child: Image.file(source,
+        width: radius * 2, height: radius * 2, fit: BoxFit.cover,
+        errorBuilder: (_, _, _) => _fallback()));
+    }
+    return _fallback();
+  }
+  Widget _fallback() => CircleAvatar(radius: radius,
+    backgroundColor: Color(character.avatarColor),
+    child: Text(character.name.isNotEmpty
+      ? String.fromCharCode(character.name.runes.first) : '?',
       style: TextStyle(color: Colors.white, fontSize: radius * .85,
         fontWeight: FontWeight.bold)));
 }
@@ -58,18 +72,24 @@ class PhoneHomeScreen extends StatelessWidget {
           const Text('心屿 · 让故事继续',
             style: TextStyle(color: Colors.white70, letterSpacing: 2)),
           const Spacer(),
+          MiniPlayer(controller: controller),
+          const SizedBox(height: 12),
           Wrap(spacing: 22, runSpacing: 25, alignment: WrapAlignment.center,
             children: [
               HomeIcon(icon: Icons.chat_bubble_rounded, name: '心屿通讯',
+                iconPath: controller.data.desktopIcons['chat'], local: controller.local,
                 color: const Color(0xFF78BBA1), onTap: () => Navigator.push(
                   context, MaterialPageRoute(builder: (_) => SocialScreen(controller: controller)))),
               HomeIcon(icon: Icons.hub_rounded, name: 'API 连接',
+                iconPath: controller.data.desktopIcons['api'], local: controller.local,
                 color: const Color(0xFF809AD2), onTap: () => Navigator.push(
                   context, MaterialPageRoute(builder: (_) => ApiProfileListScreen(controller: controller)))),
               HomeIcon(icon: Icons.music_note_rounded, name: '本地音乐',
+                iconPath: controller.data.desktopIcons['music'], local: controller.local,
                 color: const Color(0xFFCA8DA6), onTap: () => Navigator.push(
                   context, MaterialPageRoute(builder: (_) => MusicScreen(controller: controller)))),
               HomeIcon(icon: Icons.settings_rounded, name: '设置',
+                iconPath: controller.data.desktopIcons['settings'], local: controller.local,
                 color: const Color(0xFF8B8C98), onTap: () => Navigator.push(
                   context, MaterialPageRoute(builder: (_) => SettingsScreen(controller: controller)))),
             ]),
@@ -86,8 +106,10 @@ class HomeIcon extends StatelessWidget {
   final String name;
   final Color color;
   final VoidCallback onTap;
+  final String? iconPath;
+  final LocalData local;
   const HomeIcon({super.key, required this.icon, required this.name,
-    required this.color, required this.onTap});
+    required this.color, required this.onTap, required this.local, this.iconPath});
   @override
   Widget build(BuildContext context) => InkWell(onTap: onTap,
     borderRadius: BorderRadius.circular(14),
@@ -95,7 +117,12 @@ class HomeIcon extends StatelessWidget {
       children: [Container(height: 69, width: 69, decoration: BoxDecoration(
         color: color, borderRadius: BorderRadius.circular(19),
         boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 12)]),
-        child: Icon(icon, color: Colors.white, size: 35)),
+        child: (iconPath != null && iconPath!.isNotEmpty &&
+            local.resolve(iconPath!).existsSync())
+          ? ClipRRect(borderRadius: BorderRadius.circular(19),
+              child: Image.file(local.resolve(iconPath!), fit: BoxFit.cover,
+                errorBuilder: (_, _, _) => Icon(icon, color: Colors.white, size: 35)))
+          : Icon(icon, color: Colors.white, size: 35)),
         const SizedBox(height: 8),
         Text(name, style: const TextStyle(color: Colors.white, fontSize: 13,
           fontWeight: FontWeight.w600)),
@@ -142,7 +169,9 @@ class _SocialScreenState extends State<SocialScreen> {
           MomentsTab(controller: widget.controller),
           MyTab(controller: widget.controller),
         ])),
-      bottomNavigationBar: NavigationBar(selectedIndex: index,
+      bottomNavigationBar: Column(mainAxisSize: MainAxisSize.min, children: [
+        MiniPlayer(controller: widget.controller),
+        NavigationBar(selectedIndex: index,
         onDestinationSelected: (next) => setState(() => index = next),
         destinations: const [
           NavigationDestination(icon: Icon(Icons.chat_bubble_outline),
@@ -154,6 +183,7 @@ class _SocialScreenState extends State<SocialScreen> {
           NavigationDestination(icon: Icon(Icons.person_outline),
             selectedIcon: Icon(Icons.person), label: '我的'),
         ]),
+      ]),
     );
   }
 }
@@ -172,27 +202,51 @@ class ChatListTab extends StatelessWidget {
         MaterialPageRoute(builder: (_) => CharacterEditorScreen(controller: controller))),
         child: const Text('添加第一个 AI 好友')),
     ]));
-    return ListView(children: [
-      if (groups.isNotEmpty) const Padding(
-        padding: EdgeInsets.fromLTRB(18, 18, 18, 4), child: Text('群聊',
-          style: TextStyle(fontWeight: FontWeight.w700))),
-      ...groups.map((g) => ListTile(
-        leading: const CircleAvatar(child: Icon(Icons.groups_rounded)),
-        title: Text(g.name), subtitle: Text(controller.latestText(groupThread(g.id)) ??
-          '${g.memberIds.length} 位 AI 角色'),
-        trailing: const Icon(Icons.chevron_right),
+    // One clean list, ordered by the last conversation event.
+    final rows = <({String id, String title, String subtitle, DateTime? time,
+      Widget avatar, VoidCallback onTap})>[];
+    for (final group in groups) {
+      final thread = groupThread(group.id);
+      final entries = controller.threadMessages(thread);
+      rows.add((id: thread, title: group.name,
+        subtitle: entries.isEmpty ? '${group.memberIds.length} 位成员' : entries.last.text,
+        time: entries.isEmpty ? null : entries.last.createdAt,
+        avatar: const CircleAvatar(child: Icon(Icons.groups_rounded)),
         onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) =>
-          ChatScreen(controller: controller, group: g))))),
-      const Padding(padding: EdgeInsets.fromLTRB(18, 18, 18, 4),
-        child: Text('好友', style: TextStyle(fontWeight: FontWeight.w700))),
-      ...c.map((friend) => ListTile(
-        leading: CharacterAvatar(character: friend), title: Text(friend.name),
-        subtitle: Text(controller.latestText(privateThread(friend.id)) ??
-          (friend.apiProfileId == null ? '尚未绑定 API · 点击聊天前请先配置' : '开启一段新对话')),
-        trailing: const Icon(Icons.chevron_right),
+          ChatScreen(controller: controller, group: group)))));
+    }
+    for (final friend in c) {
+      final thread = privateThread(friend.id);
+      final entries = controller.threadMessages(thread);
+      rows.add((id: thread, title: friend.name,
+        subtitle: entries.isEmpty ? '开始聊天' : entries.last.text,
+        time: entries.isEmpty ? null : entries.last.createdAt,
+        avatar: CharacterAvatar(character: friend, local: controller.local),
         onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) =>
-          ChatScreen(controller: controller, friend: friend))))),
-    ]);
+          ChatScreen(controller: controller, friend: friend)))));
+    }
+    rows.sort((a, b) {
+      if (a.time == null && b.time == null) return 0;
+      if (a.time == null) return 1;
+      if (b.time == null) return -1;
+      return b.time!.compareTo(a.time!);
+    });
+    return ListView.separated(
+      itemCount: rows.length,
+      separatorBuilder: (_, _) => const Divider(height: 1, indent: 74),
+      itemBuilder: (context, index) {
+        final r = rows[index];
+        return ListTile(contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+          leading: r.avatar,
+          title: Text(r.title, maxLines: 1, overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontWeight: FontWeight.w600)),
+          subtitle: Text(r.subtitle, maxLines: 1, overflow: TextOverflow.ellipsis),
+          trailing: r.time == null ? null : Text(clockTime(r.time!),
+            style: Theme.of(context).textTheme.labelSmall),
+          onTap: r.onTap,
+        );
+      },
+    );
   }
 }
 
@@ -202,7 +256,7 @@ class MyTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) => ListView(children: [
     const ListTile(leading: CircleAvatar(child: Icon(Icons.auto_awesome)),
-      title: Text('心屿 OS'), subtitle: Text('V3.1 · 一机一码激活 · 本地优先')),
+      title: Text('心屿 OS'), subtitle: Text('V3.2 · 本地优先 · AI 社交')),
     const Divider(),
     ListTile(leading: const Icon(Icons.hub_outlined), title: const Text('API 管理'),
       subtitle: const Text('添加服务商、测试连接、修改模型'),

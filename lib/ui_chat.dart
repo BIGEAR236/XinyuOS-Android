@@ -4,6 +4,7 @@ import 'app_controller.dart';
 import 'models.dart';
 import 'ui_contacts.dart';
 import 'ui_shell.dart';
+import 'ui_extras.dart';
 
 class ChatScreen extends StatefulWidget {
   final AppController controller;
@@ -77,59 +78,65 @@ class _ChatScreenState extends State<ChatScreen> {
       final messages = widget.controller.threadMessages(thread);
       final running = widget.controller.busy.contains(thread);
       final title = group?.name ?? friend?.name ?? '聊天';
-      final last = messages.isNotEmpty ? messages.last : null;
+      final partial = widget.controller.partialReplies[thread];
+      final pendingSender = widget.controller.partialSenders[thread] ?? friend?.id ?? 'system';
+      final scheme = Theme.of(context).colorScheme;
       return Scaffold(
-        appBar: AppBar(title: Column(children: [Text(title),
-          Text(group != null ? '${group.memberIds.length} 位 AI · 每轮最多 ${group.maxReplies} 条' :
-            (friend?.apiProfileId == null ? '未绑定 API' : 'AI 角色'),
-            style: const TextStyle(fontSize: 11))]),
+        backgroundColor: scheme.surfaceContainerLow,
+        appBar: AppBar(title: Text(title, style: const TextStyle(fontSize: 18)),
           actions: [
             if (running) IconButton(tooltip: '停止生成', onPressed: () =>
               widget.controller.stop(thread), icon: const Icon(Icons.stop_circle_outlined)),
             if (group != null) IconButton(onPressed: _groupSettings,
-              icon: const Icon(Icons.tune_rounded), tooltip: '群聊设置'),
-            if (friend != null) IconButton(tooltip: '编辑角色',
-              icon: const Icon(Icons.person_outline),
+              icon: const Icon(Icons.more_horiz_rounded), tooltip: '群聊设置'),
+            if (friend != null) IconButton(tooltip: '角色资料',
+              icon: const Icon(Icons.more_horiz_rounded),
               onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) =>
                 CharacterDetailScreen(controller: widget.controller,
                   characterId: friend.id)))),
           ]),
         body: Column(children: [
-          if (messages.isEmpty) Padding(padding: const EdgeInsets.all(22),
-            child: Text(group != null
-              ? '群聊已建立。AI 将依次调用各自绑定的模型。'
-              : '这是与 $title 的私聊。先为好友绑定 API，再发消息。',
-              textAlign: TextAlign.center)),
-          Expanded(child: ListView.builder(reverse: true,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
-            itemCount: messages.length + (running ? 1 : 0),
-            itemBuilder: (context, index) {
-              if (running && index == 0) {
-                return const Padding(padding: EdgeInsets.all(12), child: Row(children: [
-                  SizedBox(width: 17, height: 17, child: CircularProgressIndicator(strokeWidth: 2)),
-                  SizedBox(width: 9), Text('正在请求模型…')
-                ]));
-              }
-              final shifted = index - (running ? 1 : 0);
-              final m = messages[messages.length - shifted - 1];
-              return ChatBubble(entry: m, controller: widget.controller);
-            })),
-          if (last != null && last.senderId == 'me' && !running)
-            const Padding(padding: EdgeInsets.symmetric(horizontal: 16),
-              child: Text('如果模型连接失败，消息仍保存在本机，错误会显示在页面底部。',
-                style: TextStyle(fontSize: 11, color: Colors.grey))),
-          SafeArea(top: false, child: Padding(
-            padding: const EdgeInsets.fromLTRB(9, 8, 9, 9),
+          Expanded(child: messages.isEmpty && !running
+            ? Center(child: Text('发一条消息，开始对话',
+                style: TextStyle(color: scheme.onSurfaceVariant)))
+            : ListView.builder(reverse: true,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+              itemCount: messages.length + (running ? 1 : 0),
+              itemBuilder: (context, index) {
+                if (running && index == 0) {
+                  if (partial != null && partial.isNotEmpty) {
+                    return ChatBubble(entry: ChatEntry(id: 'live', threadId: thread,
+                      senderId: pendingSender, text: partial,
+                      createdAt: DateTime.now()), controller: widget.controller,
+                      groupChat: group != null, streaming: true);
+                  }
+                  return const Padding(padding: EdgeInsets.all(16),
+                    child: Row(children: [
+                      SizedBox(width: 16, height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2)),
+                      SizedBox(width: 10), Text('对方正在输入…'),
+                    ]));
+                }
+                final shifted = index - (running ? 1 : 0);
+                final msg = messages[messages.length - shifted - 1];
+                return ChatBubble(entry: msg, controller: widget.controller,
+                  groupChat: group != null);
+              })),
+          MiniPlayer(controller: widget.controller),
+          SafeArea(top: false, child: Container(
+            color: scheme.surface,
+            padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
             child: Row(children: [
               Expanded(child: TextField(controller: _input,
                 minLines: 1, maxLines: 4,
                 textInputAction: TextInputAction.send,
                 onSubmitted: (_) => _send(),
-                decoration: InputDecoration(hintText: '发送消息…',
-                  filled: true, border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(24),
+                decoration: InputDecoration(hintText: '输入消息',
+                  filled: true, fillColor: scheme.surfaceContainerLow,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8),
                     borderSide: BorderSide.none)))),
-              const SizedBox(width: 7),
+              const SizedBox(width: 8),
               IconButton.filled(onPressed: running ? null : _send,
                 icon: const Icon(Icons.arrow_upward_rounded)),
             ]))),
@@ -141,37 +148,53 @@ class _ChatScreenState extends State<ChatScreen> {
 class ChatBubble extends StatelessWidget {
   final ChatEntry entry;
   final AppController controller;
-  const ChatBubble({super.key, required this.entry, required this.controller});
+  final bool groupChat;
+  final bool streaming;
+  const ChatBubble({super.key, required this.entry, required this.controller,
+    this.groupChat = false, this.streaming = false});
+
   @override
   Widget build(BuildContext context) {
-    if (entry.senderId == 'system') return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 10),
-      child: Text(entry.text, textAlign: TextAlign.center,
-        style: Theme.of(context).textTheme.bodySmall));
+    if (entry.senderId == 'system') {
+      return Padding(padding: const EdgeInsets.all(8),
+        child: Text(entry.text, textAlign: TextAlign.center,
+          style: Theme.of(context).textTheme.labelSmall));
+    }
     final mine = entry.senderId == 'me';
-    final senderCharacter = controller.character(entry.senderId);
+    final character = controller.character(entry.senderId);
     final scheme = Theme.of(context).colorScheme;
-    return Padding(padding: const EdgeInsets.symmetric(vertical: 6),
+    return Padding(padding: const EdgeInsets.symmetric(vertical: 5),
       child: Row(mainAxisAlignment: mine ? MainAxisAlignment.end : MainAxisAlignment.start,
-        crossAxisAlignment: CrossAxisAlignment.start, children: [
-        if (!mine) ...[
-          if (senderCharacter != null)
-            CharacterAvatar(character: senderCharacter, radius: 17)
-          else
-            const CircleAvatar(radius: 17, child: Icon(Icons.smart_toy_outlined, size: 18)),
-          const SizedBox(width: 8),
-        ],
-        Flexible(child: Column(crossAxisAlignment:
-          mine ? CrossAxisAlignment.end : CrossAxisAlignment.start, children: [
-          Text('${controller.displayName(entry.senderId)} · ${clockTime(entry.createdAt)}',
-            style: Theme.of(context).textTheme.labelSmall),
-          const SizedBox(height: 4),
-          Container(padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 10),
-            decoration: BoxDecoration(
-              color: mine ? scheme.primaryContainer : scheme.surfaceContainerHigh,
-              borderRadius: BorderRadius.circular(16)),
-            child: SelectableText(entry.text)),
-        ])),
-      ]));
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (!mine) ...[
+            character == null
+              ? const CircleAvatar(radius: 18, child: Icon(Icons.smart_toy_outlined, size: 18))
+              : CharacterAvatar(character: character, local: controller.local, radius: 18),
+            const SizedBox(width: 8),
+          ],
+          Flexible(child: Column(
+            crossAxisAlignment: mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+            children: [
+              if (!mine && groupChat)
+                Padding(padding: const EdgeInsets.only(bottom: 3),
+                  child: Text(controller.displayName(entry.senderId),
+                    style: Theme.of(context).textTheme.labelSmall)),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: mine ? const Color(0xFFB8EC9C) : scheme.surface,
+                  borderRadius: BorderRadius.circular(9)),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  SelectableText(entry.text,
+                    style: TextStyle(color: mine ? Colors.black87 : scheme.onSurface)),
+                  if (streaming) const Padding(
+                    padding: EdgeInsets.only(top: 3),
+                    child: SizedBox(width: 8, height: 8,
+                      child: CircularProgressIndicator(strokeWidth: 1.4))),
+                ])),
+            ])),
+          if (mine) const SizedBox(width: 5),
+        ]));
   }
 }

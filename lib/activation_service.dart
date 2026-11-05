@@ -58,43 +58,66 @@ class ActivationService extends ChangeNotifier {
     return message;
   }
 
+  /// Supports both the original XY1 JSON license and the compact XY2 binary
+  /// license. The Ed25519 public key is unchanged so old activations survive.
   Future<String?> _verify(String code, {required bool commit}) async {
     try {
       final pieces = code.split('.');
-      if (pieces.length != 3 || pieces[0] != 'XY1') {
-        return '激活码格式不正确，请重新复制完整激活码。';
+      if (pieces.length != 3 || (pieces[0] != 'XY1' && pieces[0] != 'XY2')) {
+        return '激活码格式不正确。请直接粘贴完整激活码。';
       }
       List<int> decodePart(String value) {
         final pad = List.filled((4 - value.length % 4) % 4, '=').join();
         return base64Url.decode(value + pad);
       }
-      final message = utf8.encode('XY1.${pieces[1]}');
-      final decoded = jsonDecode(utf8.decode(decodePart(pieces[1])));
-      if (decoded is! Map) return '激活码内容无效。';
-      final payload = Map<String, dynamic>.from(decoded);
       final publicKey = SimplePublicKey(base64Decode(publicKeyBase64),
           type: KeyPairType.ed25519);
       final signature = Signature(decodePart(pieces[2]), publicKey: publicKey);
-      final genuine = await Ed25519().verify(message, signature: signature);
-      if (!genuine) return '激活码签名无效，不是管理员签发的有效激活码。';
-      if (payload['v'] != 1 || payload['d'] != deviceCode) {
-        return '此激活码属于其他设备，请发送本机设备编号重新领取。';
+      final genuine = await Ed25519().verify(
+        utf8.encode('${pieces[0]}.${pieces[1]}'), signature: signature);
+      if (!genuine) return '签名校验失败：这不是管理员签发的有效激活码。';
+      String license;
+      int expiry;
+      String boundDevice;
+      if (pieces[0] == 'XY1') {
+        final decoded = jsonDecode(utf8.decode(decodePart(pieces[1])));
+        if (decoded is! Map) return '旧版激活码内容无效。';
+        final data = Map<String, dynamic>.from(decoded);
+        if (data['v'] != 1 || data['id'] is! String || data['exp'] is! int) {
+          return '旧版激活码字段无效。';
+        }
+        boundDevice = '${data['d'] ?? ''}';
+        license = data['id'] as String;
+        expiry = data['exp'] as int;
+      } else {
+        final bytes = decodePart(pieces[1]);
+        // 1 version + 10 device bytes + 4 expiration bytes + 4 serial bytes.
+        if (bytes.length != 19 || bytes[0] != 2) return '新版激活码数据长度无效。';
+        final hex = bytes.sublist(1, 11)
+            .map((value) => value.toRadixString(16).padLeft(2, '0'))
+            .join().toUpperCase();
+        boundDevice = 'XY-${List.generate(5, (i) => hex.substring(i * 4, i * 4 + 4)).join('-')}';
+        expiry = (bytes[11] << 24) | (bytes[12] << 16) |
+            (bytes[13] << 8) | bytes[14];
+        final serial = bytes.sublist(15, 19)
+            .map((value) => value.toRadixString(16).padLeft(2, '0'))
+            .join().toUpperCase();
+        license = 'XY2-$serial';
       }
-      final id = payload['id'];
-      final expiry = payload['exp'];
-      if (id is! String || id.isEmpty || expiry is! int || expiry < 0) {
-        return '激活码字段不正确。';
+      if (boundDevice != deviceCode) {
+        return '激活码与本机设备编号不匹配，请联系邀请人重新领取。';
       }
-      final today = DateTime.now().toUtc().millisecondsSinceEpoch ~/ 86400000;
-      if (expiry != 0 && today > expiry) return '激活码已过期，请联系邀请人续期。';
+      if (expiry < 0 || license.isEmpty) return '激活码字段无效。';
+      final day = DateTime.now().toUtc().millisecondsSinceEpoch ~/ 86400000;
+      if (expiry != 0 && day > expiry) return '激活码已过期，请联系邀请人。';
       if (commit) await _storage.write(key: _storageKey, value: code);
       isActivated = true;
-      licenseId = id;
+      licenseId = license;
       expiryDay = expiry;
       notifyListeners();
       return null;
     } catch (_) {
-      return '激活码无法读取或校验失败，请复制完整激活码。';
+      return '无法读取激活码。请尝试用「一键粘贴」输入完整内容。';
     }
   }
 }
