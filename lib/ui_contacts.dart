@@ -444,10 +444,16 @@ class _CharacterBasicInfoScreenState extends State<CharacterBasicInfoScreen> {
     try {
       final file = await FilePicker.pickFile(type: FileType.image);
       if (file == null) return;
-      if (await file.length() > 8 * 1024 * 1024) {
+      final fileSize = await file.length();
+      if (fileSize != null && fileSize > 8 * 1024 * 1024) {
         throw const FormatException('头像不能超过 8MB');
       }
       final path = await widget.controller.local.copyIntoApp(file, 'avatars');
+      final savedFile = widget.controller.local.resolve(path);
+      if (await savedFile.length() > 8 * 1024 * 1024) {
+        await savedFile.delete();
+        throw const FormatException('头像不能超过 8MB');
+      }
       if (mounted) setState(() => _avatarPath = path);
     } catch (e) { if (mounted) uiError(context, e); }
     finally { if (mounted) setState(() => _choosing = false); }
@@ -649,10 +655,16 @@ class CharacterChatBackgroundScreen extends StatelessWidget {
     try {
       final image = await FilePicker.pickFile(type: FileType.image);
       if (image == null) return;
-      if (await image.length() > 12 * 1024 * 1024) {
+      final imageSize = await image.length();
+      if (imageSize != null && imageSize > 12 * 1024 * 1024) {
         throw const FormatException('聊天背景不能超过 12MB');
       }
       final relative = await controller.local.copyIntoApp(image, 'chat_backgrounds');
+      final savedImage = controller.local.resolve(relative);
+      if (await savedImage.length() > 12 * 1024 * 1024) {
+        await savedImage.delete();
+        throw const FormatException('聊天背景不能超过 12MB');
+      }
       controller.setCharacterBackground(characterId, relative);
       if (context.mounted) uiError(context, '已保存这个好友的专属聊天背景');
     } catch (e) { if (context.mounted) uiError(context, e); }
