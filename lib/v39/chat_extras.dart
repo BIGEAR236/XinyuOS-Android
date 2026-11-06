@@ -93,8 +93,8 @@ class ReplySegmenter {
   static bool _isStructured(String text) =>
       text.contains('```') ||
       text.startsWith('{') || text.startsWith('[') ||
-      RegExp(r'(?m)^\*\*\d{2}:\d{2}\*\*\s*\|').hasMatch(text) ||
-      RegExp(r'(?m)^\s*[-*#>]\s').hasMatch(text);
+      RegExp(r'^\*\*\d{2}:\d{2}\*\*\s*\|', multiLine: true).hasMatch(text) ||
+      RegExp(r'^\s*[-*#>]\s', multiLine: true).hasMatch(text);
 
   static int _naturalCut(String text) {
     final midpoint = text.length ~/ 2;

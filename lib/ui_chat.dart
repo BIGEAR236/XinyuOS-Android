@@ -591,7 +591,7 @@ class ChatFormattedText extends StatelessWidget {
   // Markdown tables and code examples must continue to display normally.
   bool get _hasStoryEnvelope {
     final raw = text.trimLeft();
-    return RegExp(r'(?m)^\*\*\d{2}:\d{2}\*\*\s*\|').hasMatch(raw) ||
+    return RegExp(r'^\*\*\d{2}:\d{2}\*\*\s*\|', multiLine: true).hasMatch(raw) ||
         (raw.startsWith('{') && raw.contains('"beats"') &&
          raw.contains('"time"') && raw.contains('"status"'));
   }
