@@ -1,0 +1,36 @@
+{
+  "name": "XinyuOS V3.8 Companion Kit",
+  "delivery": "Flutter feature module & standalone demo; not integrated APK",
+  "checks": {
+    "offline_source_consistency": "passed",
+    "flutter_analyze": "not_run_in_environment",
+    "flutter_test": "not_run_in_environment",
+    "android_build": "not_run_in_environment"
+  },
+  "file_count_excluding_manifest": 23,
+  "files": {
+    ".github/workflows/verify.yml": "d6098f38b963656caa590018b1001c330b36a3b9c19608976469493079dcb4f3",
+    "README.md": "2b00af013032d785e5bb2a36647be04532f22f39bb0f198e3b50250b1d9edc69",
+    "TEST_REPORT_CN.md": "7749949d6f64aa595aad6dd1ec8ab60929acddc31656c77bb11e0578feed3254",
+    "analysis_options.yaml": "76e7f280a622e80860e85252b60c4e25b72487e4385d88cab541631e40375ff7",
+    "docs/GAME_DESIGN_CN.md": "2ee22d78f7db9dada97bdcc410a808e8e429c511acf6a7127e70ced32355ccb8",
+    "docs/INTEGRATION_CN.md": "cdcdae45c33fc2b8406c54751fd93330b562303d05d7850ee81209f3fda2ccc5",
+    "lib/core/companion.dart": "0aa41d871fc01e4d4995b760d376491deb036e08a23ec15a0900d97e30c72d68",
+    "lib/core/game_engines.dart": "0665663720a59ffbb4fa1f6ade35f0a07234b8deffc1c0fccdd8e68abfb1b6b5",
+    "lib/core/media_engine.dart": "2a8461f083a1ce5c96046ebb616367ab3cee5f84b61e604ffed0d99a6533951d",
+    "lib/core/pet_engine.dart": "c3dc101d5e07293888b1ab28f09c0349998eb8900cf971cb02b83d1d69b150e7",
+    "lib/core/storage.dart": "fd07e17a45104664f0b73e13b6ff772924abbd0314532dc652a5633f14b5780d",
+    "lib/core/story_parser.dart": "de0d437d87df7bfe51313190e4a50b180e97c48fe4b6c7fa2af6cbbc2fc01fcc",
+    "lib/main.dart": "edacd94596107c3bde1a1e2e45b572f0eecae46f092307042814fee9fb15743a",
+    "lib/pages/game_page.dart": "a342d27a09c65cff91c7b563711107acd07f553d25b29d06b7827ae6639b04c2",
+    "lib/pages/hub_page.dart": "f067837ac96214b212f2015ac13c474a6f9063adcdc9c7871acacf05ccc666d2",
+    "lib/pages/media_page.dart": "d665d958dd386ef47f44feecbdb41ea26d59aeeda48a550248441f2279d28418",
+    "lib/pages/pet_page.dart": "2387cce95196b240a6140e29b641d84c3f9122eca5b99acfe66a819e4e0d8331",
+    "lib/pages/story_page.dart": "67d8809057f9def7e703f128bd3c0aebbde9edbab64f52eecc8ccfaa976ad1e4",
+    "lib/widgets/chat_overlay.dart": "ecb537f5cca9379ca043d108114122f86f2782291e270afeb634bc2dd9aff0fa",
+    "lib/widgets/pet_art.dart": "aec6e4efdd46e25f70258ce964ca357138b187dc559915ffef57aac3852fee33",
+    "pubspec.yaml": "ec30b8b9dde469a468f253f6cab0581eb8ae48b38e1704e9ac6ab4468b683f18",
+    "test/companion_engines_test.dart": "1f6ae1a55e776fe5228972eabdb02ced8484ee001416b0bfdb1fbd2ac4aa052e",
+    "tools/check_source.py": "7a99d7b1e8a6634c150112296a96c1ba14958517c079f1d100058ba12d35dfa8"
+  }
+}

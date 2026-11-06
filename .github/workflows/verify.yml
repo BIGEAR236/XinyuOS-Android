@@ -1,0 +1,21 @@
+name: Verify standalone companion kit
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  flutter-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: python3 tools/check_source.py
+      - run: flutter pub get
+      - run: flutter analyze --no-fatal-infos --no-fatal-warnings
+      - run: flutter test
+      - name: Build example APK (debug only; NOT the existing XinyuOS production app)
+        run: |
+          flutter create --platforms=android --project-name xinyuos_companion_kit .
+          flutter build apk --debug
