@@ -16,6 +16,7 @@ import 'ui_local_apps.dart';
 import 'ui_world.dart';
 import 'v39/desktop_icon_settings.dart';
 import 'v39/app_launch_care.dart';
+import 'v40/wallet_page.dart';
 
 void uiError(BuildContext context, Object error) {
   if (!context.mounted) return;
@@ -112,22 +113,6 @@ class _PhoneHomeScreenState extends State<PhoneHomeScreen> {
         icon=Icons.auto_awesome_outlined; title='虚拟世界';
         color=const Color(0xFF8D7CCA);
         destination=WorldHubScreen(controller:controller); break;
-      case 'wallet':
-        icon=Icons.account_balance_wallet_outlined; title='虚拟钱包';
-        color=const Color(0xFFC89E59);
-        destination=VirtualWalletScreen(controller:controller); break;
-      case 'pet':
-        icon=Icons.pets_rounded; title='养宠物';
-        color=const Color(0xFFDA9A8B);
-        destination=VirtualPetScreen(controller:controller); break;
-      case 'shop':
-        icon=Icons.shopping_bag_outlined; title='星愿商店';
-        color=const Color(0xFF8CB89F);
-        destination=VirtualShopScreen(controller:controller); break;
-      case 'watch':
-        icon=Icons.ondemand_video_outlined; title='一起看';
-        color=const Color(0xFF7D93C8);
-        destination=CoWatchScreen(controller:controller); break;
       default:
         icon = Icons.settings_rounded; title = '设置';
         color = const Color(0xFF8B8C98);
@@ -195,6 +180,7 @@ class _PhoneHomeScreenState extends State<PhoneHomeScreen> {
                     runSpacing: (15 * scale).clamp(8.0, 22.5).toDouble(),
                     alignment: WrapAlignment.center,
                     children: normalizeDesktopOrder(controller.data.desktopOrder)
+                      .where((key) => !const {'wallet','pet','shop','watch'}.contains(key))
                       .map((key) => _desktopTile(context, key)).toList()))),
               const SizedBox(height: 18),
               const Text('长按图标并拖到另一图标上，可调整桌面顺序',
@@ -421,8 +407,14 @@ class MyTab extends StatelessWidget {
       : const CircleAvatar(child: Icon(Icons.person)),
       title: const Text('我的头像'), subtitle: const Text('从相册选择头像'),
       trailing: const Icon(Icons.edit_outlined), onTap: () => _avatar(context)),
+    ListTile(leading: const CircleAvatar(child: Icon(Icons.account_balance_wallet_outlined)),
+      title: const Text('我的虚拟账户'),
+      subtitle: Text('星币余额 ${controller.data.worldBalance} ⭐ · AI 好友独立账户'),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) =>
+        XyWalletPage(controller: controller)))),
     const ListTile(leading: CircleAvatar(child: Icon(Icons.auto_awesome)),
-      title: Text('心屿 OS'), subtitle: Text('V3.6 · 本地优先 · AI 社交')),
+      title: Text('心屿 OS'), subtitle: Text('V4.0 · 聊天内虚拟生活 · 本地优先')),
     const Divider(),
     ListTile(leading: const Icon(Icons.tune_outlined), title: const Text('通讯设置'),
       subtitle: const Text('聊天、界面与显示、朋友权限、存储空间、主动关怀'),

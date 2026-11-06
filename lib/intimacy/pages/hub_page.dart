@@ -12,10 +12,11 @@ import 'story_page.dart';
 class CompanionHub extends StatefulWidget {
   final String roleId, roleName;
   final String persona;
+  final String? initialActivity;
   final RoleResponder? responder;
   final MusicRoom? musicRoom;
   final void Function(String roleId, String description)? onLocalEvent;
-  const CompanionHub({super.key,required this.roleId,required this.roleName,this.persona='',this.responder,this.musicRoom,this.onLocalEvent});
+  const CompanionHub({super.key,required this.roleId,required this.roleName,this.persona='',this.initialActivity,this.responder,this.musicRoom,this.onLocalEvent});
   @override State<CompanionHub> createState()=>_CompanionHubState();
 }
 class _CompanionHubState extends State<CompanionHub> {
@@ -28,8 +29,26 @@ class _CompanionHubState extends State<CompanionHub> {
       if (mounted) agent.setGameAiEnabled(enabled);
     });
     music=widget.musicRoom??MusicRoom();ownsMusic=widget.musicRoom==null;
+    if (widget.initialActivity != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final page = _activityPage(widget.initialActivity!);
+        if (page != null) Navigator.push(context,
+          MaterialPageRoute(builder: (_) => page));
+      });
+    }
   }
   @override void dispose(){agent.dispose();if(ownsMusic)music.dispose();super.dispose();}
+  Widget? _activityPage(String kind) => switch (kind) {
+    'pet' => PetPage(agent: agent),
+    'music' => MusicPage(agent: agent, room: music),
+    'watch' => WatchPage(agent: agent),
+    'game' => GamesPage(agent: agent),
+    'story' => StoryPreviewPage(roleId: widget.roleId,
+      roleName: widget.roleName, persona: widget.persona,
+      responder: agent.responder),
+    _ => null,
+  };
   @override Widget build(BuildContext context)=>Scaffold(
     backgroundColor:const Color(0xFFFFFAFD),
     appBar:AppBar(title:Text('${widget.roleName} · 亲密互动'),backgroundColor:const Color(0xFFFFF6FB)),

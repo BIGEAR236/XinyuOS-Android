@@ -367,7 +367,8 @@ class SettingsScreen extends StatelessWidget {
         const ListTile(title: Text('自定义虚拟手机桌面图标'),
           subtitle: Text('点击以下应用可上传 PNG / JPG 等图片；不会修改安卓系统桌面图标。')),
         ...[('chat', '心屿通讯'), ('api', 'API 连接'),
-          ('music', '本地音乐'), ('settings', '设置'), ('album', '相册'), ('memo', '备忘录'), ('diary', '日记')].map((item) {
+          ('music', '本地音乐'), ('settings', '设置'), ('album', '相册'),
+          ('memo', '备忘录'), ('diary', '日记'), ('world', '虚拟世界')].map((item) {
           final path = controller.data.desktopIcons[item.$1];
           final img = path == null || path.isEmpty ? null : controller.local.resolve(path);
           return ListTile(

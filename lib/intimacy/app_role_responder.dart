@@ -2,7 +2,6 @@ import 'package:http/http.dart' as http;
 
 import '../api_client.dart';
 import '../app_controller.dart';
-import '../models.dart';
 import 'core/companion.dart';
 
 /// Uses the EXISTING multi-provider adapter and existing encrypted API key store.
@@ -59,7 +58,9 @@ class AppRoleResponder implements RoleResponder {
         ..add(ModelTurn('user', incoming))
         ..add(ModelTurn('assistant', answer));
       if (history.length > 10) history.removeRange(0, history.length - 10);
-      if (!scripted) app.recordIntimacyEvent(roleId, event);
+      if (!scripted && !event.startsWith('虚拟商店请求')) {
+        app.recordIntimacyEvent(roleId, event);
+      }
       return answer;
     } finally {
       client.close();

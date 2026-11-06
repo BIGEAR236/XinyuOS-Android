@@ -421,6 +421,7 @@ class AppController extends ChangeNotifier {
       text: text.trim(), createdAt: DateTime.now(), parentId: parentId);
     m.comments = [...m.comments, comment];
     _changed();
+    awardVirtualActivity('moments');
     return comment;
   }
 
@@ -470,6 +471,7 @@ class AppController extends ChangeNotifier {
           if (choice.toUpperCase().startsWith('LIKE')) {
             if (!m.likedBy.contains(actor.id)) m.likedBy = [...m.likedBy, actor.id];
             _changed();
+            awardVirtualActivity('moments', roleId: actor.id);
           } else if (!choice.toUpperCase().startsWith('SKIP')) {
             // Most models follow COMMENT:, but some relay models answer with
             // a natural sentence or a full-width colon. Keep that usable.
@@ -482,6 +484,7 @@ class AppController extends ChangeNotifier {
                 text: text.length > 160 ? text.substring(0, 160) : text,
                 createdAt: DateTime.now())];
               _changed();
+              awardVirtualActivity('moments', roleId: actor.id);
             }
           }
         } catch (e) { failures.add('${actor.name}：$e'); }
@@ -536,6 +539,7 @@ $context
               authorId: actor.id, text: text.length > 180 ? text.substring(0, 180) : text,
               parentId: target.id, createdAt: DateTime.now())];
             _changed();
+            awardVirtualActivity('moments', roleId: actor.id);
           }
         } catch (e) { failures.add('${actor.name}：$e'); }
         finally { client.close(); _clients.remove(thread); }
@@ -599,6 +603,7 @@ $context
     data.moments.insert(0, MomentEntry(id: newId(), characterId: 'me',
       text: clean, createdAt: DateTime.now()));
     _changed();
+    awardVirtualActivity('moments');
   }
   /// /time and /calc are local commands, not paid model calls.
   bool runLocalCommand(String thread, String input) {
@@ -629,6 +634,117 @@ $context
 
 
   // --- Purely local virtual-world economy. Never real money. ---
+  /// Real-money transfer is intentionally IMPOSSIBLE. The user's original
+  /// worldBalance remains the single authoritative player wallet.
+  /// AI accounts use tagged ledger entries to avoid changing AppData/models.dart.
+  int roleWalletBalance(String roleId) {
+    if (character(roleId) == null) return 0;
+    final delta = data.worldLedger.where((entry) =>
+      entry.characterId == roleId && entry.description.startsWith('v40:ai:'))
+      .fold<int>(0, (sum, entry) => sum + entry.delta);
+    return (1200 + delta).clamp(0, 9999999).toInt();
+  }
+
+  bool _changeRoleWallet(String roleId, int amount, String reason) {
+    if (character(roleId) == null || amount == 0 || amount.abs() > 100000 ||
+        (amount < 0 && roleWalletBalance(roleId) < -amount)) return false;
+    data.worldLedger.add(VirtualLedgerEntry(id: newId(),
+      createdAt: DateTime.now(), delta: amount,
+      description: 'v40:ai:$reason', characterId: roleId));
+    return true;
+  }
+
+  /// Local reward with REAL-TIME cooldowns and daily limits. Different
+  /// activities share one ledger; opening a page itself pays nothing.
+  bool awardVirtualActivity(String category, {String? roleId}) {
+    const rules = <String, (int coins, int count, Duration cooldown)>{
+      'chat': (3, 8, Duration(minutes: 20)),
+      'intimacy': (8, 3, Duration(hours: 1)),
+      'moments': (6, 2, Duration(hours: 6)),
+    };
+    final rule = rules[category];
+    if (rule == null) return false;
+    final now = DateTime.now();
+    final today = data.worldLedger.where((entry) =>
+      entry.delta > 0 && entry.description.startsWith('v40:reward:$category:') &&
+      entry.createdAt.year == now.year &&
+      entry.createdAt.month == now.month &&
+      entry.createdAt.day == now.day).toList();
+    if (today.length >= rule.$2 ||
+        (today.isNotEmpty && now.difference(today.last.createdAt) < rule.$3)) {
+      return false;
+    }
+    data.worldBalance = (data.worldBalance + rule.$1).clamp(0, 9999999).toInt();
+    data.worldLedger.add(VirtualLedgerEntry(id: newId(), createdAt: now,
+      delta: rule.$1, description: 'v40:reward:$category:本地互动奖励',
+      characterId: roleId));
+    if (roleId != null && character(roleId) != null) {
+      _changeRoleWallet(roleId, switch (category) {
+        'chat' => 2, 'intimacy' => 5, _ => 3,
+      }, 'reward:$category');
+    }
+    _worldEvent('reward', '完成${category == 'chat' ? '有效聊天' : category == 'intimacy' ? '共同互动' : '朋友圈互动'}，获得${rule.$1}星币',
+      characterId: roleId);
+    return true;
+  }
+
+  /// Both actors pay only their own simulated ledger. No real-world payment.
+  bool payVirtualMarketplace(int amount, {String? payerRoleId, required String items}) {
+    if (amount < 1 || amount > 100000 || items.isEmpty) return false;
+    if (payerRoleId == null) {
+      if (!_spend(amount, 'V4虚拟集市：$items')) return false;
+    } else {
+      if (!_changeRoleWallet(payerRoleId, -amount, 'shop:$items')) return false;
+    }
+    data.worldOrders.add(VirtualOrder(
+      id: newId(), createdAt: DateTime.now(),
+      title: items.length > 240 ? items.substring(0, 240) : items,
+      count: 1, total: amount));
+    _worldEvent('shopping', '虚拟集市购买：$items，${payerRoleId == null ? '玩家' : displayName(payerRoleId)}支付$amount星币',
+      characterId: payerRoleId);
+    return true;
+  }
+
+  /// Persist a model's one-time simulated checkout decision in the role chat.
+  /// The decision was already generated by the user's opt-in paid API call.
+  void recordAiMarketplaceDecision(String roleId, String modelText,
+      {required bool approved, int amount = 0}) {
+    if (character(roleId) == null) return;
+    final clean = modelText.replaceFirst(RegExp(
+      r'^(AGREE|DECLINE)\s*[:：,，-]?\s*', caseSensitive: false), '').trim();
+    final message = approved
+      ? '🛍️ 我同意为这笔虚拟购物支付 $amount 星币。${clean.isEmpty ? '' : ' $clean'}'
+      : '🛍️ 这次虚拟购物我暂时不付款。${clean.isEmpty ? '' : ' $clean'}';
+    _addMessage(privateThread(roleId), roleId, message);
+  }
+
+  /// Only creates a LOCAL invitation message. Does not silently call an API.
+  bool addLocalActivityInvite(String characterId, String activity) {
+    final role = character(characterId);
+    if (role == null || !const <String>{
+      'pet', 'music', 'watch', 'game', 'story',
+    }.contains(activity)) return false;
+    final names = <String, String>{
+      'pet': '一起养宠物', 'music': '一起听歌', 'watch': '一起看视频',
+      'game': '一起玩游戏', 'story': '沉浸剧情',
+    };
+    _addMessage(privateThread(characterId), 'me',
+      '💌 邀请${role.name}${names[activity]}（本地互动邀请）');
+    _worldEvent('invite', '我邀请${role.name}${names[activity]}', characterId: characterId);
+    return true;
+  }
+
+  bool sendVirtualGiftToRole(String characterId, String gift, int cost) {
+    final role = character(characterId);
+    if (role == null || gift.trim().isEmpty || cost < 1 || cost > 300 ||
+        !_spend(cost, '赠送虚拟礼物$gift给${role.name}', characterId: characterId)) {
+      return false;
+    }
+    _addMessage(privateThread(characterId), 'me', '🎁 我送给${role.name}一份虚拟礼物：$gift');
+    _worldEvent('gift', '我送给${role.name}虚拟礼物：$gift', characterId: characterId);
+    return true;
+  }
+
   bool _spend(int amount, String reason, {String? characterId}) {
     if (amount <= 0 || amount > data.worldBalance || amount > 100000) return false;
     data.worldBalance -= amount;
@@ -666,6 +782,8 @@ $context
     final dailyCoins = todays.fold<int>(0, (sum, l) =>
       sum + (l.delta > 0 ? l.delta : 0));
     if (dailyCoins + offer.coins > 90) return '今天的虚拟红包上限为90星币。';
+    if (offer.coins > 0 && !_changeRoleWallet(entry.senderId, -offer.coins,
+        'sent:ai_red_packet')) return '这位 AI 好友的虚拟账户余额不足。';
     data.worldBalance = (data.worldBalance + offer.coins).clamp(0, 9999999).toInt();
     data.worldLedger.add(VirtualLedgerEntry(
       id: newId(), createdAt: now, delta: offer.coins,
@@ -689,6 +807,7 @@ $context
     final text = description.trim();
     _worldEvent('intimacy', text.length > 220 ? text.substring(0, 220) : text,
       characterId: roleId);
+    awardVirtualActivity('intimacy', roleId: roleId);
   }
 
   bool dailyCheckIn() {
@@ -708,6 +827,7 @@ $context
     if (c == null || amount < 1 || amount > 500 ||
         !_spend(amount, '给${c.name}发送虚拟红包', characterId:characterId)) return false;
     _addMessage(privateThread(characterId),'me','🧧 虚拟红包 $amount 星币：$note');
+    _changeRoleWallet(characterId, amount, 'received:user_red_packet');
     _worldEvent('gift','我给${c.name}送了 $amount 星币虚拟红包',characterId:characterId);
     return true;
   }
@@ -865,7 +985,9 @@ $context
     final listening = music.hasTrack
       ? '用户当前在本机${music.playing ? '播放' : '暂停'}名为「${music.trackTitle}」的本地音乐。你没有收到音频，不能声称听到了声音。'
       : '';
-    return '虚拟世界（完全模拟、无真实货币）：余额${data.worldBalance}星币；'
+    return '虚拟世界（完全模拟、无真实货币）：玩家余额${data.worldBalance}星币；'
+      '角色「${displayName(characterId)}」自己的独立虚拟余额为${roleWalletBalance(characterId)}星币。'
+      '购物或赠礼必须用户主动确认；你无权直接发起支付。'
       '宠物${pet.name}，心情${pet.happiness}/100，饥饿度${pet.hunger}/100。'
       '${recent.isEmpty ? '' : '近期共同事件：$recent。'}$listening';
   }

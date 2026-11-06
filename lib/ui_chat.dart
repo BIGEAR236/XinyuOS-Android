@@ -15,6 +15,9 @@ import 'ui_proactive.dart';
 import 'intimacy/core/story_parser.dart';
 import 'intimacy/pages/story_page.dart';
 import 'v39/chat_extras.dart';
+import 'intimacy/app_role_responder.dart';
+import 'intimacy/pages/hub_page.dart';
+import 'v40/marketplace_page.dart';
 
 /// Chat actions are local operations. There is no remote recall: a model may
 /// have already processed a previously sent message.
@@ -48,6 +51,9 @@ class _ChatScreenState extends State<ChatScreen> {
     final quote = _quote;
     _input.clear(); _focus.unfocus(); setState(() => _quote = null);
     if (widget.controller.runLocalCommand(thread,message)) return;
+    final beforeReplies = widget.friend == null ? 0 :
+      widget.controller.threadMessages(thread)
+        .where((m) => m.senderId == widget.friend!.id).length;
     String? err;
     if (widget.group != null) {
       err = await widget.controller.sendGroup(widget.group!, message, quote: quote);
@@ -57,6 +63,11 @@ class _ChatScreenState extends State<ChatScreen> {
           : await widget.controller.sendPrivate(c, message, quote: quote);
     }
     if (!mounted) return;
+    if (err == null && widget.friend != null &&
+        widget.controller.threadMessages(thread)
+          .where((m) => m.senderId == widget.friend!.id).length > beforeReplies) {
+      widget.controller.awardVirtualActivity('chat', roleId: widget.friend!.id);
+    }
     if (err != null) {
       if (!widget.controller.threadMessages(thread).any((m) =>
           m.senderId == 'me' && m.text == message)) _input.text = message;
@@ -211,6 +222,124 @@ class _ChatScreenState extends State<ChatScreen> {
       await _regenerate();
     } else if (choice == 'delete') {
       await _delete([entry.id]);
+    }
+  }
+
+  Future<void> _openPlusMenu() async {
+    if (widget.controller.busy.contains(thread)) return;
+    final friend = widget.friend == null ? null :
+      widget.controller.character(widget.friend!.id);
+    final selection = await showModalBottomSheet<String>(context: context,
+      showDragHandle: true, isScrollControlled: true,
+      builder: (sheet) => SafeArea(child: SingleChildScrollView(child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 6, 12, 22),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const ListTile(title: Text('聊天里的更多玩法',
+            style: TextStyle(fontSize: 19, fontWeight: FontWeight.bold)),
+            subtitle: Text('发送邀请、礼物与虚拟购物都在聊天里完成')),
+          ListTile(leading: const Icon(Icons.photo_outlined),
+            title: const Text('发送本地图片'),
+            onTap: () => Navigator.pop(sheet, 'image')),
+          if (friend != null) ...[
+            const Divider(height: 12),
+            ListTile(leading: const Icon(Icons.redeem_outlined),
+              title: const Text('发送虚拟红包'),
+              subtitle: const Text('只扣除本地星币，非现实转账'),
+              onTap: () => Navigator.pop(sheet, 'red')),
+            ListTile(leading: const Icon(Icons.card_giftcard_outlined),
+              title: const Text('赠送礼物'),
+              onTap: () => Navigator.pop(sheet, 'gift')),
+            ListTile(leading: const Icon(Icons.storefront_outlined),
+              title: const Text('星愿集市 · 虚拟购物'),
+              subtitle: const Text('鞋靴／服饰／生活好物，每类 100 件'),
+              onTap: () => Navigator.pop(sheet, 'shop')),
+            const Divider(height: 12),
+            const ListTile(title: Text('发送共同生活邀请')),
+            ListTile(leading: const Icon(Icons.pets_outlined),
+              title: const Text('一起养宠物'),
+              onTap: () => Navigator.pop(sheet, 'pet')),
+            ListTile(leading: const Icon(Icons.music_note_outlined),
+              title: const Text('一起听歌'),
+              onTap: () => Navigator.pop(sheet, 'music')),
+            ListTile(leading: const Icon(Icons.ondemand_video_outlined),
+              title: const Text('一起看视频'),
+              onTap: () => Navigator.pop(sheet, 'watch')),
+            ListTile(leading: const Icon(Icons.casino_outlined),
+              title: const Text('一起玩游戏'),
+              subtitle: const Text('五子棋／飞行棋／大富翁'),
+              onTap: () => Navigator.pop(sheet, 'game')),
+            ListTile(leading: const Icon(Icons.auto_stories_outlined),
+              title: const Text('沉浸剧情'),
+              onTap: () => Navigator.pop(sheet, 'story')),
+          ],
+        ])))));
+    if (selection == null || !mounted) return;
+    if (selection == 'image') return _pickImage();
+    if (friend == null) return;
+    if (selection == 'red') return _sendVirtualRedPacket(friend);
+    if (selection == 'gift') return _sendVirtualGift(friend);
+    if (selection == 'shop') {
+      await Navigator.push(context, MaterialPageRoute(builder: (_) =>
+        XyMarketplacePage(controller: widget.controller, roleId: friend.id)));
+      return;
+    }
+    if (!const {'pet','music','watch','game','story'}.contains(selection)) return;
+    widget.controller.addLocalActivityInvite(friend.id, selection);
+    await Navigator.push(context, MaterialPageRoute(builder: (_) => CompanionHub(
+      roleId: friend.id, roleName: friend.name, persona: friend.persona,
+      initialActivity: selection,
+      responder: widget.controller.profile(friend.apiProfileId) == null ?
+        null : AppRoleResponder(widget.controller),
+      onLocalEvent: widget.controller.recordIntimacyEvent,
+    )));
+  }
+
+  Future<void> _sendVirtualRedPacket(Character friend) async {
+    final input = TextEditingController(text: '20');
+    try {
+      final amount = await showDialog<int>(context: context,
+        builder: (dialog) => AlertDialog(title: Text('给${friend.name}发虚拟红包'),
+          content: Column(mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('当前余额：${widget.controller.data.worldBalance} ⭐'),
+              const SizedBox(height: 10),
+              TextField(controller: input, keyboardType: TextInputType.number,
+                decoration: const InputDecoration(labelText: '星币金额（1～500）',
+                  border: OutlineInputBorder())),
+              const SizedBox(height: 8),
+              const Text('完全虚拟的赠送，不涉及真正的红包转账。',
+                style: TextStyle(fontSize: 12)),
+            ]), actions: [
+              TextButton(onPressed: () => Navigator.pop(dialog), child: const Text('取消')),
+              FilledButton(onPressed: () => Navigator.pop(dialog,
+                int.tryParse(input.text.trim())), child: const Text('发送')),
+            ]));
+      if (amount == null || !mounted) return;
+      if (!widget.controller.giveRedEnvelope(friend.id, amount)) {
+        uiError(context, '红包发送失败：金额无效或余额不足');
+      }
+    } finally { input.dispose(); }
+  }
+
+  Future<void> _sendVirtualGift(Character friend) async {
+    final gifts = <(String, int)>[
+      ('玫瑰花束', 35), ('绒绒玩偶', 65), ('手写明信片', 25),
+      ('星光香薰', 80), ('幸运手链', 105), ('小蛋糕', 45),
+    ];
+    final selected = await showModalBottomSheet<(String, int)>(context: context,
+      showDragHandle: true, builder: (sheet) => SafeArea(child: ListView(
+        shrinkWrap: true, children: [
+          ListTile(title: Text('送给${friend.name}一份心意'),
+            subtitle: Text('我的虚拟余额：${widget.controller.data.worldBalance} ⭐')),
+          ...gifts.map((gift) => ListTile(
+            leading: const Icon(Icons.card_giftcard_outlined),
+            title: Text(gift.$1), trailing: Text('${gift.$2} ⭐'),
+            onTap: () => Navigator.pop(sheet, gift))),
+        ])));
+    if (selected == null || !mounted) return;
+    if (!widget.controller.sendVirtualGiftToRole(
+        friend.id, selected.$1, selected.$2)) {
+      uiError(context, '礼物发送失败：虚拟余额不足');
     }
   }
 
@@ -423,8 +552,9 @@ class _ChatScreenState extends State<ChatScreen> {
           color: scheme.surface,
           padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
           child: Row(children: [
-            IconButton(tooltip: '发送本地图片', icon: const Icon(Icons.add_photo_alternate_outlined),
-              onPressed: _pickImage),
+            IconButton(tooltip: '更多 · 红包／礼物／互动／购物',
+              icon: const Icon(Icons.add_circle_outline_rounded, size: 28),
+              onPressed: _openPlusMenu),
             if (widget.friend != null) IconButton(tooltip: '切换模型',
               onPressed: _chooseModel, icon: const Icon(Icons.tune, size: 21)),
             Expanded(child: TextField(controller: _input, focusNode: _focus, minLines: 1, maxLines: 4,
