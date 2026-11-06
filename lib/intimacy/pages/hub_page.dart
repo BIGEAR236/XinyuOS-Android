@@ -42,7 +42,8 @@ class _CompanionHubState extends State<CompanionHub> {
       _item('🎬','一起看视频','本地视频 · SRT 字幕 · 边看边聊天',()=>WatchPage(agent:agent)),
       _item('🎲','一起玩游戏','五子棋 · 飞行棋 · 星币大富翁',()=>GamesPage(agent:agent)),
       _item('📝','沉浸剧情渲染','动作／对白／内心／状态 · 自动分层',()=>StoryPreviewPage(
-        roleName:widget.roleName,persona:widget.persona,
+        roleId: widget.roleId, roleName:widget.roleName, persona:widget.persona,
+        responder: agent.responder,
         client:agent.responder is CompatibleResponder?StoryApiClient(
           endpoint:(agent.responder as CompatibleResponder).endpoint,
           model:(agent.responder as CompatibleResponder).model,

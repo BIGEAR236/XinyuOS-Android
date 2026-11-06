@@ -12,6 +12,8 @@ import 'ui_contacts.dart';
 import 'ui_shell.dart';
 import 'ui_extras.dart';
 import 'ui_proactive.dart';
+import 'intimacy/core/story_parser.dart';
+import 'intimacy/pages/story_page.dart';
 
 /// Chat actions are local operations. There is no remote recall: a model may
 /// have already processed a previously sent message.
@@ -39,6 +41,9 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _send() async {
     final message = _input.text.trim();
     if (message.isEmpty || widget.controller.busy.contains(thread)) return;
+    if (widget.controller.formatFor(thread) != 'auto') {
+      widget.controller.setThreadFormat(thread, 'auto');
+    }
     final quote = _quote;
     _input.clear(); _focus.unfocus(); setState(() => _quote = null);
     if (widget.controller.runLocalCommand(thread,message)) return;
@@ -71,6 +76,9 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _regenerate() async {
+    if (widget.controller.formatFor(thread) != 'auto') {
+      widget.controller.setThreadFormat(thread, 'auto');
+    }
     final c = widget.friend == null ? null :
         widget.controller.character(widget.friend!.id);
     if (c == null) return;
@@ -111,6 +119,9 @@ class _ChatScreenState extends State<ChatScreen> {
       if (action == 'resend' && entry.senderId == 'me' && widget.friend != null) {
         final c = widget.controller.character(widget.friend!.id);
         if (c == null) return;
+        if (widget.controller.formatFor(thread) != 'auto') {
+          widget.controller.setThreadFormat(thread, 'auto');
+        }
         final error = await widget.controller.editAndResendPrivate(c,entry.id,tc.text);
         if (mounted && error != null) uiError(context,error);
       } else {
@@ -218,6 +229,9 @@ class _ChatScreenState extends State<ChatScreen> {
         _focus.unfocus();
         final c = widget.controller.character(widget.friend!.id);
         if (c == null) return;
+        if (widget.controller.formatFor(thread) != 'auto') {
+          widget.controller.setThreadFormat(thread, 'auto');
+        }
         final err = await widget.controller.sendPrivateImage(c, path);
         if (mounted && err != null) uiError(context, err);
       }
@@ -387,24 +401,6 @@ class _ChatScreenState extends State<ChatScreen> {
               onPressed: _pickImage),
             if (widget.friend != null) IconButton(tooltip: '切换模型',
               onPressed: _chooseModel, icon: const Icon(Icons.tune, size: 21)),
-            PopupMenuButton<String>(tooltip: '设置输出格式',
-              onSelected: (value) => widget.controller.setThreadFormat(thread,value),
-              itemBuilder: (_) => [
-                for (final option in const <String,String>{
-                  'auto':'自动按用户要求','markdown':'Markdown / 表格 / 代码块',
-                  'json':'严格 JSON','plain':'纯文本',
-                }.entries) PopupMenuItem(value:option.key,child:Row(children:[
-                  Icon(widget.controller.formatFor(thread)==option.key
-                    ? Icons.check_circle : Icons.circle_outlined,size:18),
-                  const SizedBox(width:8),Text(option.value),
-                ])),
-              ],child: Padding(padding:const EdgeInsets.symmetric(horizontal:5),
-                child: Column(mainAxisSize:MainAxisSize.min,children:[
-                  const Icon(Icons.data_object,size:23),
-                  Text(widget.controller.formatFor(thread)=='auto' ? '自动' :
-                    widget.controller.formatFor(thread).toUpperCase(),
-                    style:const TextStyle(fontSize:9)),
-                ]))),
             Expanded(child: TextField(controller: _input, focusNode: _focus, minLines: 1, maxLines: 4,
               textInputAction: TextInputAction.send,
               onSubmitted: (_) => _send(),
@@ -496,7 +492,9 @@ class ChatBubble extends StatelessWidget {
                         child: Image.file(controller.local.resolve(entry.imagePath),
                           width: 210, fit: BoxFit.cover)),
                     if (entry.text != '[图片]')
-                      ChatFormattedText(text: entry.text, color: color),
+                      ChatFormattedText(text: entry.text, color: color,
+                        roleName: controller.displayName(entry.senderId),
+                        immersive: !mine && controller.data.chatMode == 'story'),
                     if (entry.editedAt != null)
                       Text('已编辑', style: TextStyle(fontSize: 10,
                         color: color.withValues(alpha: .65))),
@@ -542,9 +540,26 @@ class ChatBubble extends StatelessWidget {
 class ChatFormattedText extends StatelessWidget {
   final String text;
   final Color color;
-  const ChatFormattedText({super.key, required this.text, required this.color});
+  final String roleName;
+  final bool immersive;
+  const ChatFormattedText({super.key, required this.text, required this.color,
+    this.roleName = '角色', this.immersive = false});
+
+  // Only recognized story replies use the special renderer. Ordinary text,
+  // Markdown tables and code examples must continue to display normally.
+  bool get _hasStoryEnvelope {
+    final raw = text.trimLeft();
+    return RegExp(r'(?m)^\*\*\d{2}:\d{2}\*\*\s*\|').hasMatch(raw) ||
+        (raw.startsWith('{') && raw.contains('"beats"') &&
+         raw.contains('"time"') && raw.contains('"status"'));
+  }
+
   @override
   Widget build(BuildContext context) {
+    if (immersive && _hasStoryEnvelope) {
+      final scene = StoryParser.parse(text, fallbackName: roleName);
+      if (scene.beats.isNotEmpty) return StorySceneCard(scene: scene);
+    }
     final theme=Theme.of(context);
     return MarkdownBody(data:text,selectable:true,
       styleSheet:MarkdownStyleSheet.fromTheme(theme).copyWith(

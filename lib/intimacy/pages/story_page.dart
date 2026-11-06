@@ -5,8 +5,10 @@ import '../core/companion.dart';
 
 class StoryPreviewPage extends StatefulWidget {
   final StoryApiClient? client;
-  final String roleName, persona;
-  const StoryPreviewPage({super.key,this.client,this.roleName='楼一',this.persona=''});
+  final RoleResponder? responder;
+  final String roleId, roleName, persona;
+  const StoryPreviewPage({super.key,this.client,this.responder,
+    this.roleId='',this.roleName='楼一',this.persona=''});
   @override State<StoryPreviewPage> createState()=>_StoryPreviewPageState();
 }
 class _StoryPreviewPageState extends State<StoryPreviewPage> {
@@ -34,14 +36,20 @@ class _StoryPreviewPageState extends State<StoryPreviewPage> {
   bool generating=false;
   final prompt=TextEditingController();
   String? error;
-  @override void initState(){super.initState();parsed=StoryParser.parse(editor.text,fallbackName:'楼一');}
+  @override void initState(){super.initState();parsed=StoryParser.parse(editor.text,fallbackName:widget.roleName);}
   @override void dispose(){editor.dispose();prompt.dispose();super.dispose();}
   Future<void> generate() async {
     final text=prompt.text.trim();if(text.isEmpty)return;
     setState((){generating=true;error=null;});
     try{
-      final output=await widget.client!.generate(roleName:widget.roleName,persona:widget.persona,
-        userMessage:text,formatContract:StoryParser.outputContract,virtualPlace:parsed.place.isEmpty?'虚拟场景':parsed.place);
+      final output = widget.responder != null
+        ? await widget.responder!.respond(roleId: widget.roleId,
+            roleName: widget.roleName, persona: widget.persona,
+            event: '剧情专用输出契约：${StoryParser.outputContract}',
+            userMessage: text)
+        : await widget.client!.generate(roleName:widget.roleName,persona:widget.persona,
+            userMessage:text,formatContract:StoryParser.outputContract,
+            virtualPlace:parsed.place.isEmpty?'虚拟场景':parsed.place);
       if(!mounted)return;
       setState((){editor.text=output;parsed=StoryParser.parse(output,fallbackName:widget.roleName);});
     }catch(e){if(mounted)setState(()=>error='调用模型失败：$e');}
@@ -57,10 +65,10 @@ class _StoryPreviewPageState extends State<StoryPreviewPage> {
       ],
       const SizedBox(height:9),
       TextField(controller:prompt,maxLines:2,decoration:InputDecoration(
-        hintText:widget.client==null?'未绑定 API：可展开原始文本测试格式解析':'输入消息，例如：这个红包是送给你的',
+        hintText:widget.client==null && widget.responder==null?'未绑定 API：可展开原始文本测试格式解析':'输入消息，例如：这个红包是送给你的',
         border:const OutlineInputBorder(),suffixIcon:const Icon(Icons.mode_comment_outlined))),
       const SizedBox(height:7),
-      FilledButton.icon(onPressed:widget.client==null || generating?null:generate,
+      FilledButton.icon(onPressed:(widget.client==null && widget.responder==null) || generating?null:generate,
         icon:generating?const SizedBox.square(dimension:16,child:CircularProgressIndicator(strokeWidth:2,color:Colors.white)):const Icon(Icons.auto_awesome),
         label:Text(generating?'模型正在生成':'根据人格与格式要求生成')),
       if(error!=null)Padding(padding:const EdgeInsets.all(8),child:Text(error!,style:const TextStyle(color:Colors.red))),

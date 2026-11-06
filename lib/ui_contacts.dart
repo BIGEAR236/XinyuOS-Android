@@ -11,6 +11,8 @@ import 'models.dart';
 import 'ui_chat.dart';
 import 'ui_extras.dart';
 import 'ui_shell.dart';
+import 'intimacy/app_role_responder.dart';
+import 'intimacy/pages/hub_page.dart';
 
 class ApiProfileListScreen extends StatelessWidget {
   final AppController controller;
@@ -388,6 +390,13 @@ class CharacterDetailScreen extends StatelessWidget {
                   c.chatBackgroundPath.isEmpty ? '使用默认背景' : '已设置专属图片',
                   () => _open(context, CharacterChatBackgroundScreen(
                     controller: controller, characterId: c.id))),
+                const Divider(height: 1, indent: 57),
+                _section(context, Icons.favorite_border_rounded, '亲密互动',
+                  '共同养宠 · 一起听歌 · 看视频 · 玩游戏',
+                  () => _open(context, CompanionHub(
+                    roleId: c.id, roleName: c.name, persona: c.persona,
+                    responder: controller.profile(c.apiProfileId) == null
+                        ? null : AppRoleResponder(controller)))),
               ])),
             const SizedBox(height: 24),
             FilledButton.icon(

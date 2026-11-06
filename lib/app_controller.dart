@@ -598,6 +598,20 @@ $context
     _changed();
   }
 
+  /// The V3.8 companion bridge records only the role's game events.
+  /// Local game state remains authoritative; AI text cannot directly change it.
+  final Map<String, DateTime> _lastIntimacyEvent = {};
+  void recordIntimacyEvent(String roleId, String description) {
+    if (character(roleId) == null || description.trim().isEmpty) return;
+    final now = DateTime.now();
+    final last = _lastIntimacyEvent[roleId];
+    if (last != null && now.difference(last) < const Duration(seconds: 15)) return;
+    _lastIntimacyEvent[roleId] = now;
+    final text = description.trim();
+    _worldEvent('intimacy', text.length > 220 ? text.substring(0, 220) : text,
+      characterId: roleId);
+  }
+
   bool dailyCheckIn() {
     final today = DateTime.now();
     if (data.worldLedger.any((l) => l.description == '每日签到' &&
