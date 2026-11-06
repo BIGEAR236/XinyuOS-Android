@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../app_controller.dart';
-import '../models.dart';
 
 /// Opt-in AI diary/memo drafting from EXISTING role conversations.
 /// Entries are stored separately in local SharedPreferences, not in the old
@@ -122,7 +121,7 @@ class _AiJournalPageState extends State<AiJournalPage> {
               entries.remove(e);
               await prefs.setString(key, jsonEncode(entries));
               if (mounted) setState(() {});
-            }, icon: const Icon(Icons.delete_outline), child: const Text('删除此条')),
+            }, icon: const Icon(Icons.delete_outline), label: const Text('删除此条')),
           ])),
       ]),
     );

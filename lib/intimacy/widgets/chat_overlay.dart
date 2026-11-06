@@ -77,7 +77,7 @@ class _FloatingCompanionChatState extends State<FloatingCompanionChat> {
                     decoration: InputDecoration(isDense: true,
                       hintText: '边玩边和${a.roleName}说话…',
                       fillColor: Colors.white, filled: true,
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(22)))),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(22))))),
                   IconButton.filled(
                     tooltip: '发送消息（可能调用付费模型）',
                     onPressed: a.busy ? null : submit,
