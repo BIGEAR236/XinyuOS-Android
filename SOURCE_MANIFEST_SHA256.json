@@ -1,0 +1,12 @@
+{
+  "README_先看.md": "ed347b0b7c2ec3324f3d231d8fcfa33e7301b8ab4777ac039c430831e2fb4b96",
+  "SOURCE_MANIFEST_SHA256.json": "2a968b8a72dd35195869b3ffdcbe4d3bf1c595dc0f1fba861d95710cb2499b1c",
+  "lib/main.dart": "66977502162c19f0e98a812dd9d679e9541061afe2186b97ecbbce78455a9a8c",
+  "lib/ui_extras.dart": "68f58ce8193a9fb48c282c1551687b92b442a303c602deffa2c3ca0f046212b7",
+  "lib/ui_proactive.dart": "e63815fbfa60ff2732dbf1bdb2ad032d1e7ff33f95e5336cf99d6e21413cc380",
+  "lib/ui_shell.dart": "1fa0ff1942ffde57a9684474a83ed739c15a9dbe2a99a7c2758b03272f16dedc",
+  "lib/v39/app_launch_care.dart": "9c7ae0c4fe1e1f8615f94a70c1379061956065f1d8163021b35ac6e3ba959b9c",
+  "lib/v39/desktop_icon_settings.dart": "f4a03989e38db0966c8c8528cade470f4125a6292ad2215970030132dc860d54",
+  "lib/v39/font_import_policy.dart": "2de66cc8aae4e35a53c0ffabfa44784942249cdf8e719a40120ab3f3943f728e",
+  "tools/check_patch.py": "2624632bbd8cba916520a985627eb190b79fbb23aaf8d3ac9a9d63b4770c7e7a"
+}

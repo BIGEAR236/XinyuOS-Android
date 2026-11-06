@@ -4,6 +4,9 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+import 'intimacy/core/story_parser.dart';
+import 'v39/chat_extras.dart';
 
 import 'api_client.dart';
 import 'local_data.dart';
@@ -16,6 +19,7 @@ import 'request_gate.dart';
 class AppController extends ChangeNotifier {
   final LocalData local;
   final FlutterSecureStorage _keys = const FlutterSecureStorage();
+  final SharedPreferencesAsync _chatPrefs = SharedPreferencesAsync();
   AppData data;
   late final MusicController music;
   final Map<String, String> partialReplies = {};
@@ -84,6 +88,13 @@ class AppController extends ChangeNotifier {
   Future<String?> getKey(String profileId) =>
       _keys.read(key: 'api_key_$profileId');
 
+  /// Per-character daily chat bubble count. One API request, multiple local bubbles.
+  Future<int> replyBubbleCount(String characterId) async =>
+      (await _chatPrefs.getInt('chat.replyPieces.$characterId') ?? 1).clamp(1, 3).toInt();
+  Future<void> setReplyBubbleCount(String characterId, int count) async =>
+      _chatPrefs.setInt('chat.replyPieces.$characterId', count.clamp(1, 3).toInt());
+
+
   Future<void> saveProfile(ApiProfile p, {String? apiKey}) async {
     final existing = profile(p.id);
     if (apiKey != null && apiKey.trim().isNotEmpty) {
@@ -111,6 +122,37 @@ class AppController extends ChangeNotifier {
       return await MultiModelApi.call(client: client, profile: profile,
         apiKey: key, persona: '你是 API 连通性测试程序。',
         turns: [const ModelTurn('user', '连接测试：请用一句简短的中文回答。')]);
+    } finally { client.close(); }
+  }
+
+  /// Explicit one-shot generation; never called automatically after chatting.
+  /// Only a short excerpt of this role's own text conversation is transmitted.
+  Future<String> generateAiCompanionNote(Character c, {required String kind}) async {
+    final p = profile(c.apiProfileId);
+    if (p == null) throw StateError('请先给${c.name}绑定模型。');
+    final key = await getKey(p.id);
+    if (key == null || key.isEmpty) throw StateError('请先填写 API Key。');
+    final recent = threadMessages(privateThread(c.id))
+      .where((m) => !m.recalled && m.senderId != 'system' && m.text.trim().isNotEmpty)
+      .toList();
+    if (recent.isEmpty) throw StateError('暂无可用于生成的聊天记录。');
+    final excerpt = recent.length > 20 ? recent.sublist(recent.length - 20) : recent;
+    final transcript = excerpt.map((m) =>
+      '${m.senderId == 'me' ? '用户' : c.name}：${m.text}')
+      .join('\n');
+    final trimmed = transcript.length > 6000 ? transcript.substring(transcript.length - 6000) : transcript;
+    final client = http.Client();
+    try {
+      return await MultiModelApi.call(
+        client: client, profile: p, apiKey: key,
+        persona: c.persona, roleName: c.name,
+        chatMode: 'daily', formatMode: 'auto',
+        contextHint: '任务是根据用户自愿提供的历史聊天，撰写一份$kind草稿。'
+          '请忠于对话已有事实，不要编造记忆或声称记录了实际世界未发生的事件。'
+          '输出完整中文正文，不要代码块，不要主动读取任何其他聊天。',
+        turns: [ModelTurn('user',
+          '请根据下面我与你的聊天记录，写一篇${kind == '日记' ? '约150字、第一人称的温柔日记' : '最多8条、简洁可操作的备忘录'}。\n$trimmed')],
+      );
     } finally { client.close(); }
   }
 
@@ -382,8 +424,12 @@ class AppController extends ChangeNotifier {
     return comment;
   }
 
+  /// The player's own posts are not represented as a Character, so treating
+  /// 'me' like a normal Character ID silently excludes every AI friend.
+  /// For self-posts, only explicitly opted-in AI characters are eligible.
   List<Character> socialAudience(MomentEntry m) => data.characters.where((c) =>
-    c.id != m.characterId && areFriends(c.id, m.characterId)).toList();
+    c.id != m.characterId && c.allowSocialInteractions &&
+    (m.characterId == 'me' || areFriends(c.id, m.characterId))).toList();
 
   /// Manually invoked: each eligible AI decides whether to like or comment.
   /// Never loops on its own: maximum two model calls for a user action.
@@ -596,6 +642,39 @@ $context
       kind:kind, description:description, characterId:characterId));
     if (data.worldEvents.length > 150) data.worldEvents.removeAt(0);
     _changed();
+  }
+
+  bool hasClaimedAiGift(String messageId) => data.worldLedger.any((l) =>
+    l.description.contains('v39:claim:$messageId:'));
+
+  /// Local virtual-only gift transfer. No monetary value. Must be claimed
+  /// through the AI message, once, and within a daily 3 gifts / 90 coin cap.
+  String? claimAiGift(ChatEntry entry) {
+    if (entry.senderId == 'me' || entry.senderId == 'system' ||
+        character(entry.senderId) == null) return '只能领取 AI 好友送出的虚拟礼物。';
+    final offer = VirtualGiftOffer.parse(entry.text);
+    if (offer == null) return '消息没有有效的虚拟红包或礼物。';
+    if (hasClaimedAiGift(entry.id)) return '你已经领取过这份礼物。';
+    final now = DateTime.now();
+    final todays = data.worldLedger.where((l) =>
+      l.description.contains('v39:claim:') &&
+      l.characterId == entry.senderId &&
+      l.createdAt.year == now.year &&
+      l.createdAt.month == now.month &&
+      l.createdAt.day == now.day).toList();
+    if (todays.length >= 3) return '今天已领取该角色的3份虚拟礼物。';
+    final dailyCoins = todays.fold<int>(0, (sum, l) =>
+      sum + (l.delta > 0 ? l.delta : 0));
+    if (dailyCoins + offer.coins > 90) return '今天的虚拟红包上限为90星币。';
+    data.worldBalance = (data.worldBalance + offer.coins).clamp(0, 9999999).toInt();
+    data.worldLedger.add(VirtualLedgerEntry(
+      id: newId(), createdAt: now, delta: offer.coins,
+      description: '领取${offer.isRedPacket ? '虚拟红包' : '虚拟礼物'}${offer.name} · v39:claim:${entry.id}:',
+      characterId: entry.senderId,
+    ));
+    _worldEvent('gift', '你收到了${displayName(entry.senderId)}送来的${offer.name}（完全虚拟）。',
+      characterId: entry.senderId);
+    return null;
   }
 
   /// The V3.8 companion bridge records only the role's game events.
@@ -868,12 +947,24 @@ $context
     if (busy.contains(thread)) return '此会话有正在生成的请求，请先停止。';
     final turns = _turns(thread, c.id);
     if (turns.isEmpty) return '没有有效的用户消息。';
+    final requestedMode = formatFor(thread);
+    final latestUser = turns.last.text;
+    final wantsStory = data.chatMode == 'story' || RegExp(
+      r'剧情格式|沉浸剧情|内心独白|好感度|醋意|场景状态|\*\*\d{2}:\d{2}\*\*').hasMatch(latestUser);
+    final mode = wantsStory ? 'json' : requestedMode;
+    final bubbleCount = data.chatMode == 'daily' && !wantsStory
+      ? await replyBubbleCount(c.id) : 1;
     final run = _begin(thread);
     final client = http.Client(); _clients[thread] = client;
-    final mode = formatFor(thread);
     try {
       TokenUsage? usage;
-      final context = [contextHint, _worldContext(c.id)].where((s) => s.trim().isNotEmpty).join('\n');
+      final context = [contextHint, _worldContext(c.id),
+        if (wantsStory) '请按下方剧情格式契约输出，不能混淆对白与内心：\n${StoryParser.outputContract}',
+        if (!wantsStory && bubbleCount > 1)
+          '日常聊天请用$bubbleCount段短句回复，每段最好在15～35字内，句子自然、不要编号。',
+        if (!wantsStory)
+          '当你确实想主动赠送虚拟物品时，可以偶尔在答复末尾单独一行输出[虚拟礼物:玫瑰]或[虚拟红包:10]。虚拟红包限1～30星币，没有现实价值，不可请求付款；不必每次赠送。',
+      ].where((s) => s.trim().isNotEmpty).join('\n');
       var answer = await MultiModelApi.call(client: client, profile: p,
         apiKey: key, persona: c.persona, roleName: c.name,
         turns: turns, chatMode: data.chatMode, formatMode: mode,
@@ -895,11 +986,16 @@ $context
         if (!_validJson(answer)) throw ApiCallFailure('该模型未遵守 JSON 格式；请换模型或放宽格式要求。');
       }
       if (!_current(thread,run)) return null;
-      final msg = ChatEntry(id: newId(), threadId: thread,
-        senderId: c.id, text: answer, createdAt: DateTime.now(),
-        previousVersions: [...oldVersions],
-        inputTokens: usage?.input, outputTokens: usage?.output);
-      data.messages.add(msg);
+      final parts = bubbleCount > 1 && !wantsStory && mode == 'auto'
+        ? ReplySegmenter.split(answer, bubbleCount) : <String>[answer];
+      for (var i = 0; i < parts.length; i++) {
+        data.messages.add(ChatEntry(id: newId(), threadId: thread,
+          senderId: c.id, text: parts[i],
+          createdAt: DateTime.now().add(Duration(milliseconds: i)),
+          previousVersions: i == 0 ? [...oldVersions] : const [],
+          inputTokens: i == 0 ? usage?.input : null,
+          outputTokens: i == 0 ? usage?.output : null));
+      }
       _changed();
       return null;
     } catch (e) {

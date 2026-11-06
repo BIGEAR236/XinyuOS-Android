@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../core/companion.dart';
 import '../core/media_engine.dart';
+import '../core/storage.dart';
 import 'game_page.dart';
 import 'media_page.dart';
 import 'pet_page.dart';
@@ -13,7 +14,8 @@ class CompanionHub extends StatefulWidget {
   final String persona;
   final RoleResponder? responder;
   final MusicRoom? musicRoom;
-  const CompanionHub({super.key,required this.roleId,required this.roleName,this.persona='',this.responder,this.musicRoom});
+  final void Function(String roleId, String description)? onLocalEvent;
+  const CompanionHub({super.key,required this.roleId,required this.roleName,this.persona='',this.responder,this.musicRoom,this.onLocalEvent});
   @override State<CompanionHub> createState()=>_CompanionHubState();
 }
 class _CompanionHubState extends State<CompanionHub> {
@@ -21,7 +23,10 @@ class _CompanionHubState extends State<CompanionHub> {
   late MusicRoom music;
   late bool ownsMusic;
   @override void initState(){super.initState();
-    agent=CompanionController(roleId:widget.roleId,roleName:widget.roleName,persona:widget.persona,responder:widget.responder);
+    agent=CompanionController(roleId:widget.roleId,roleName:widget.roleName,persona:widget.persona,responder:widget.responder,onLocalEvent:widget.onLocalEvent);
+    CompanionStorage().getGameAiEnabled(widget.roleId).then((enabled) {
+      if (mounted) agent.setGameAiEnabled(enabled);
+    });
     music=widget.musicRoom??MusicRoom();ownsMusic=widget.musicRoom==null;
   }
   @override void dispose(){agent.dispose();if(ownsMusic)music.dispose();super.dispose();}
@@ -34,10 +39,10 @@ class _CompanionHubState extends State<CompanionHub> {
         const SizedBox(height:7),
         Text('专属角色：${widget.roleName}  ·  各角色独立宠物存档',style:const TextStyle(fontSize:12,color:Color(0xFF826A80))),
         const SizedBox(height:10),
-        const Text('进入任一空间，底部都有半透明即时聊天栏；动作可触发角色主动回应。',style:TextStyle(fontSize:12)),
+        const Text('进入任一空间，右下角圆形按钮可展开聊天。游戏 AI 评论默认关闭，节省 API 费用。',style:TextStyle(fontSize:12)),
       ]))),
       const SizedBox(height:12),
-      _item('🥚','一起养宠物','彩绘蛋壳 · 15种宠物 · 养成动作 · 情绪变化',()=>PetPage(agent:agent)),
+      _item('🥚','一起养宠物','彩绘蛋壳 · 30种宠物 · 现实时间冷却 · 等级成长',()=>PetPage(agent:agent)),
       _item('🎵','一起听歌','本地音乐 · 同步 LRC 歌词 · 一边听一边说',()=>MusicPage(agent:agent,room:music)),
       _item('🎬','一起看视频','本地视频 · SRT 字幕 · 边看边聊天',()=>WatchPage(agent:agent)),
       _item('🎲','一起玩游戏','五子棋 · 飞行棋 · 星币大富翁',()=>GamesPage(agent:agent)),
@@ -49,7 +54,7 @@ class _CompanionHubState extends State<CompanionHub> {
           model:(agent.responder as CompatibleResponder).model,
           apiKey:(agent.responder as CompatibleResponder).apiKey):null)),
       const SizedBox(height:12),
-      const Text('每次动作可触发一条 AI 评论，但有 8 秒冷却与请求占用保护，不会每秒调用付费 API。',style:TextStyle(fontSize:12,color:Colors.black54)),
+      const Text('游戏每步 AI 评论默认关闭，可在游戏列表或棋盘里手动开启；手动聊天仍会调用模型。',style:TextStyle(fontSize:12,color:Colors.black54)),
     ]),
   );
   Widget _item(String emoji,String title,String subtitle,Widget Function() page)=>Card(color:Colors.white,elevation:0,child:ListTile(

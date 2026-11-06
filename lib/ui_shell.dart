@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:async';
 
 import 'package:file_picker/file_picker.dart';
 
@@ -13,6 +14,8 @@ import 'ui_extras.dart';
 import 'ui_social_settings.dart';
 import 'ui_local_apps.dart';
 import 'ui_world.dart';
+import 'v39/desktop_icon_settings.dart';
+import 'v39/app_launch_care.dart';
 
 void uiError(BuildContext context, Object error) {
   if (!context.mounted) return;
@@ -51,9 +54,29 @@ class CharacterAvatar extends StatelessWidget {
         fontWeight: FontWeight.bold)));
 }
 
-class PhoneHomeScreen extends StatelessWidget {
+class PhoneHomeScreen extends StatefulWidget {
   final AppController controller;
   const PhoneHomeScreen({super.key, required this.controller});
+
+  @override
+  State<PhoneHomeScreen> createState() => _PhoneHomeScreenState();
+}
+
+class _PhoneHomeScreenState extends State<PhoneHomeScreen> {
+  AppController get controller => widget.controller;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      // Generate an authorized, due AI message without making the popup wait
+      // for a network call; the popup itself is always a local reminder.
+      unawaited(controller.processDueEvents().catchError((Object _) {}));
+      unawaited(AppLaunchCarePrompt.checkAndShow(context, controller)
+        .catchError((Object _) {}));
+    });
+  }
 
   Widget _desktopTile(BuildContext context, String key) {
     late final IconData icon;
@@ -111,6 +134,7 @@ class PhoneHomeScreen extends StatelessWidget {
         destination = SettingsScreen(controller: controller); break;
     }
     Widget item() => HomeIcon(icon: icon, name: title, color: color,
+      iconScale: DesktopIconScale.current.value,
       iconPath: controller.data.desktopIcons[key], local: controller.local,
       onTap: () => Navigator.push(context,
         MaterialPageRoute(builder: (_) => destination)));
@@ -164,10 +188,14 @@ class PhoneHomeScreen extends StatelessWidget {
               MiniPlayer(controller: controller),
               const SizedBox(height: 12),
               ConstrainedBox(constraints: const BoxConstraints(maxWidth: 380),
-                child: Wrap(spacing: 8, runSpacing: 15,
-                  alignment: WrapAlignment.center,
-                  children: normalizeDesktopOrder(controller.data.desktopOrder)
-                    .map((key) => _desktopTile(context, key)).toList())),
+                child: ValueListenableBuilder<double>(
+                  valueListenable: DesktopIconScale.current,
+                  builder: (context, scale, _) => Wrap(
+                    spacing: (8 * scale).clamp(4.0, 12.0).toDouble(),
+                    runSpacing: (15 * scale).clamp(8.0, 22.5).toDouble(),
+                    alignment: WrapAlignment.center,
+                    children: normalizeDesktopOrder(controller.data.desktopOrder)
+                      .map((key) => _desktopTile(context, key)).toList()))),
               const SizedBox(height: 18),
               const Text('长按图标并拖到另一图标上，可调整桌面顺序',
                 style: TextStyle(color: Colors.white70, fontSize: 11)),
@@ -187,25 +215,35 @@ class HomeIcon extends StatelessWidget {
   final VoidCallback onTap;
   final String? iconPath;
   final LocalData local;
+  final double iconScale;
   const HomeIcon({super.key, required this.icon, required this.name,
-    required this.color, required this.onTap, required this.local, this.iconPath});
+    required this.color, required this.onTap, required this.local,
+    this.iconPath, this.iconScale = 1.0});
   @override
-  Widget build(BuildContext context) => InkWell(onTap: onTap,
-    borderRadius: BorderRadius.circular(14),
-    child: SizedBox(width: 78, child: Column(mainAxisSize: MainAxisSize.min,
-      children: [Container(height: 69, width: 69, decoration: BoxDecoration(
-        color: color, borderRadius: BorderRadius.circular(19),
-        boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 12)]),
-        child: (iconPath != null && iconPath!.isNotEmpty &&
-            local.resolve(iconPath!).existsSync())
-          ? ClipRRect(borderRadius: BorderRadius.circular(19),
-              child: Image.file(local.resolve(iconPath!), fit: BoxFit.cover,
-                errorBuilder: (_, _, _) => Icon(icon, color: Colors.white, size: 35)))
-          : Icon(icon, color: Colors.white, size: 35)),
-        const SizedBox(height: 8),
-        Text(name, style: const TextStyle(color: Colors.white, fontSize: 13,
-          fontWeight: FontWeight.w600)),
-      ])));
+  Widget build(BuildContext context) {
+    final scale = iconScale.clamp(0.7, 1.5).toDouble();
+    return InkWell(onTap: onTap,
+      borderRadius: BorderRadius.circular(14 * scale),
+      child: SizedBox(width: 78 * scale,
+        child: Column(mainAxisSize: MainAxisSize.min,
+          children: [Container(height: 69 * scale, width: 69 * scale,
+            decoration: BoxDecoration(color: color,
+              borderRadius: BorderRadius.circular(19 * scale),
+              boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 12)]),
+            child: (iconPath != null && iconPath!.isNotEmpty &&
+                local.resolve(iconPath!).existsSync())
+              ? ClipRRect(borderRadius: BorderRadius.circular(19 * scale),
+                  child: Image.file(local.resolve(iconPath!), fit: BoxFit.cover,
+                    errorBuilder: (_, _, _) => Icon(icon,
+                      color: Colors.white, size: 35 * scale)))
+              : Icon(icon, color: Colors.white, size: 35 * scale)),
+            SizedBox(height: 8 * scale),
+            Text(name, maxLines: 2, textAlign: TextAlign.center,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(color: Colors.white, fontSize: 13,
+                fontWeight: FontWeight.w600)),
+          ])));
+  }
 }
 
 class SocialScreen extends StatefulWidget {

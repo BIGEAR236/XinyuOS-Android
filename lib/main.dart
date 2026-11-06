@@ -6,6 +6,7 @@ import 'activation_service.dart';
 import 'ui_activation.dart';
 import 'ui_shell.dart';
 import 'proactive_service.dart';
+import 'v39/desktop_icon_settings.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -23,6 +24,7 @@ Future<void> main() async {
         }
       } catch (_) { /* Invalid font: fall back to OS default. */ }
     }
+    await DesktopIconScale.initialize();
     final activation = await ActivationService.create();
     runApp(XinyuApp(controller: controller, activation: activation));
   } catch (error) {

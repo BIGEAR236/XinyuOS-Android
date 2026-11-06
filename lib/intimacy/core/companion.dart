@@ -59,9 +59,21 @@ class CompanionController extends ChangeNotifier {
   RoleResponder? responder;
   final lines = <CompanionLine>[];
   bool busy = false;
+  bool gameAiEnabled = false; // OFF by default: game moves are local and free.
+  final void Function(String roleId, String description)? onLocalEvent;
+  void setGameAiEnabled(bool enabled) { gameAiEnabled = enabled; notifyListeners(); }
+  void gameEvent(String description) {
+    lastEvent = description;
+    onLocalEvent?.call(roleId, description);
+    if (gameAiEnabled) {
+      event(description); // May cost provider tokens; ordinary cooldown still applies.
+    } else {
+      notifyListeners(); // No network request; game state remains local.
+    }
+  }
   DateTime? lastAuto;
   String lastEvent = '在亲密互动空间休息';
-  CompanionController({required this.roleId, required this.roleName, this.persona='', this.responder});
+  CompanionController({required this.roleId, required this.roleName, this.persona='', this.responder, this.onLocalEvent});
   String get sourceLabel => responder == null ? '离线示例·非真实 AI' : 'API 实时互动';
   void setResponder(RoleResponder? value) { responder = value; notifyListeners(); }
   String mock(String event) {

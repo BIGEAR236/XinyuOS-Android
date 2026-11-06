@@ -13,6 +13,8 @@ import 'ui_extras.dart';
 import 'ui_shell.dart';
 import 'intimacy/app_role_responder.dart';
 import 'intimacy/pages/hub_page.dart';
+import 'v39/ai_journal_page.dart';
+import 'v39/my_moments_page.dart';
 
 class ApiProfileListScreen extends StatelessWidget {
   final AppController controller;
@@ -391,12 +393,22 @@ class CharacterDetailScreen extends StatelessWidget {
                   () => _open(context, CharacterChatBackgroundScreen(
                     controller: controller, characterId: c.id))),
                 const Divider(height: 1, indent: 57),
+                _section(context, Icons.auto_stories_outlined, 'AI 日记与备忘录',
+                  '根据最近对话生成草稿 · 自主确认保存',
+                  () => _open(context, AiJournalPage(
+                    controller: controller, roleId: c.id))),
+                const Divider(height: 1, indent: 57),
+                _section(context, Icons.mark_chat_read_outlined, '我的朋友圈评论',
+                  '邀请已授权 AI 好友评论我的动态',
+                  () => _open(context, MyMomentsInteractionPage(controller: controller))),
+                const Divider(height: 1, indent: 57),
                 _section(context, Icons.favorite_border_rounded, '亲密互动',
                   '共同养宠 · 一起听歌 · 看视频 · 玩游戏',
                   () => _open(context, CompanionHub(
                     roleId: c.id, roleName: c.name, persona: c.persona,
                     responder: controller.profile(c.apiProfileId) == null
-                        ? null : AppRoleResponder(controller)))),
+                        ? null : AppRoleResponder(controller),
+                    onLocalEvent: controller.recordIntimacyEvent))),
               ])),
             const SizedBox(height: 24),
             FilledButton.icon(

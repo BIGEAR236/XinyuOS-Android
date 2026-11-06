@@ -14,6 +14,7 @@ import 'ui_extras.dart';
 import 'ui_proactive.dart';
 import 'intimacy/core/story_parser.dart';
 import 'intimacy/pages/story_page.dart';
+import 'v39/chat_extras.dart';
 
 /// Chat actions are local operations. There is no remote recall: a model may
 /// have already processed a previously sent message.
@@ -238,6 +239,28 @@ class _ChatScreenState extends State<ChatScreen> {
     } catch (e) { if (mounted) uiError(context, e); }
   }
 
+  Future<void> _chooseReplyBubbleCount() async {
+    final id = widget.friend?.id;
+    if (id == null) return;
+    final current = await widget.controller.replyBubbleCount(id);
+    if (!mounted) return;
+    final chosen = await showModalBottomSheet<int>(context: context,
+      showDragHandle: true, builder: (ctx) => SafeArea(child: Column(
+      mainAxisSize: MainAxisSize.min, children: [
+        const ListTile(title: Text('日常聊天气泡数量'),
+          subtitle: Text('一次 API 请求产生多条本地消息，不会按条数重复请求。剧情场景不拆分。')),
+        for (final n in [1, 2, 3]) ListTile(
+          leading: Icon(current == n ? Icons.radio_button_checked : Icons.radio_button_unchecked),
+          title: Text(n == 1 ? '每次一条完整消息' : '每次约 $n 条短消息'),
+          onTap: () => Navigator.pop(ctx, n)),
+      ])));
+    if (chosen != null) {
+      await widget.controller.setReplyBubbleCount(id, chosen);
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('已设置：每次回复最多 $chosen 条气泡，仍只请求一次 API。')));
+    }
+  }
+
   void _chooseModel() async {
     final c = widget.friend == null ? null :
       widget.controller.character(widget.friend!.id);
@@ -332,6 +355,8 @@ class _ChatScreenState extends State<ChatScreen> {
                 if (context.mounted) Navigator.push(context, MaterialPageRoute(
                   builder: (_) => CharacterDetailScreen(controller: widget.controller,
                     characterId: c.id)));
+              } else if (v == 'replies') {
+                await _chooseReplyBubbleCount();
               } else if (v == 'reset') {
                 if (await _confirm('清空当前会话',
                   '将删除这一段本地聊天记录，但角色设定仍会保留。此操作不可恢复。')) {
@@ -340,6 +365,7 @@ class _ChatScreenState extends State<ChatScreen> {
               }
             }, itemBuilder: (_) => const [
               PopupMenuItem(value: 'profile', child: Text('角色资料')),
+              PopupMenuItem(value: 'replies', child: Text('日常回复：1 / 2 / 3 条短消息')),
               PopupMenuItem(value: 'reset', child: Text('清空当前会话（重新开始）')),
             ], icon: const Icon(Icons.more_horiz)),
         ]),
@@ -441,6 +467,8 @@ class ChatBubble extends StatelessWidget {
       padding: const EdgeInsets.all(8), child: Text(entry.text,
         textAlign: TextAlign.center, style: Theme.of(context).textTheme.labelSmall));
     final mine = entry.senderId == 'me';
+    final gift = !mine && entry.senderId != 'system' && !entry.recalled && !streaming
+      ? VirtualGiftOffer.parse(entry.text) : null;
     final character = controller.character(entry.senderId);
     final scheme = Theme.of(context).colorScheme;
     final bubbleColor = Color(mine ? controller.data.myBubbleColor :
@@ -495,6 +523,20 @@ class ChatBubble extends StatelessWidget {
                       ChatFormattedText(text: entry.text, color: color,
                         roleName: controller.displayName(entry.senderId),
                         immersive: !mine && controller.data.chatMode == 'story'),
+                    if (gift != null) Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: FilledButton.tonalIcon(
+                        onPressed: controller.hasClaimedAiGift(entry.id) ? null : () {
+                          final result = controller.claimAiGift(entry);
+                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                            content: Text(result ?? (gift.isRedPacket
+                              ? '已领取${gift.coins}虚拟星币' : '已收下${gift.name}'))));
+                        },
+                        icon: Icon(gift.isRedPacket ? Icons.redeem : Icons.card_giftcard),
+                        label: Text(controller.hasClaimedAiGift(entry.id)
+                          ? '已经领取' : gift.isRedPacket
+                            ? '领取虚拟红包 · ${gift.coins}⭐' : '收下礼物 · ${gift.name}'),
+                      )),
                     if (entry.editedAt != null)
                       Text('已编辑', style: TextStyle(fontSize: 10,
                         color: color.withValues(alpha: .65))),
@@ -556,7 +598,7 @@ class ChatFormattedText extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (immersive && _hasStoryEnvelope) {
+    if (_hasStoryEnvelope) { // Auto-detect valid story envelopes in ordinary chats too.
       final scene = StoryParser.parse(text, fallbackName: roleName);
       if (scene.beats.isNotEmpty) return StorySceneCard(scene: scene);
     }

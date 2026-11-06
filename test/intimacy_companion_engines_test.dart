@@ -27,8 +27,8 @@ void main(){
   test('15 unique pet species, per-role serialization and hatch',(){
     expect(petSpecies.length,greaterThanOrEqualTo(15));
     expect(petSpecies.map((p)=>p.id).toSet().length,petSpecies.length);
-    final p=PetState();p.eggProgress=95;
-    p.setCreatedAt(DateTime.now().subtract(const Duration(hours:2)));
+    final p=PetState();p.eggProgress=95;p.interactionCount=6;
+    p.setCreatedAt(DateTime.now().subtract(const Duration(hours:25)));
     final chosen=p.hatch(rng:Random(3));
     expect(p.species,chosen.id);
     final copy=PetState.fromJson(p.toJson());expect(copy.species,p.species);

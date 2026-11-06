@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../core/companion.dart';
 import '../core/game_engines.dart';
+import '../core/storage.dart';
 import '../widgets/chat_overlay.dart';
 
 class GamesPage extends StatelessWidget {
@@ -9,6 +10,7 @@ class GamesPage extends StatelessWidget {
   const GamesPage({super.key,required this.agent});
   @override Widget build(BuildContext context) => CompanionScaffold(title:'和${agent.roleName}玩游戏',agent:agent,
     child:ListView(padding:const EdgeInsets.all(16),children:[
+      GameAiToggle(agent:agent),
       _game(context,'⚫','五子棋','15×15 棋盘 · AI 会阻挡四连并尝试连五',()=>GomokuPage(agent:agent)),
       _game(context,'✈️','飞行棋','双人简化规则 · 骰子起飞与撞机',()=>FlightPage(agent:agent)),
       _game(context,'🏠','大富翁','16 格迷你地产棋 · 星币买地和收租',()=>MonopolyPage(agent:agent)),
@@ -35,14 +37,14 @@ class _GomokuPageState extends State<GomokuPage> {
   String tip='你执黑子先手。点击棋盘任意交叉点落子。';
   void move(int row,int col){
     if(!game.put(row,col,1)) return;
-    if(game.over) { setState(()=>tip='你赢了！五子连珠！'); widget.agent.event('用户在五子棋战胜了${widget.agent.roleName}'); return; }
+    if(game.over) { setState(()=>tip='你赢了！五子连珠！'); widget.agent.gameEvent('用户在五子棋战胜了${widget.agent.roleName}'); return; }
     final ai=game.bestAiMove();
     if(ai!=null) game.put(ai.$1,ai.$2,2);
     setState(()=>tip=game.over?'${widget.agent.roleName}五子连珠！':'你走(${row+1},${col+1})，AI 回应(${(ai?.$1??0)+1},${(ai?.$2??0)+1})');
-    widget.agent.event('五子棋新回合，$tip。当前需要聊棋局而不是随意编造落点');
+    widget.agent.gameEvent('五子棋新回合，$tip。当前需要聊棋局而不是随意编造落点');
   }
   @override Widget build(BuildContext context)=>CompanionScaffold(title:'⚫ 和${widget.agent.roleName}下五子棋',agent:widget.agent,
-    actions:[IconButton(tooltip:'重新开始',onPressed:(){setState((){game=Gomoku();tip='新的一局开始了';});widget.agent.event('五子棋重新开局');},icon:const Icon(Icons.refresh))],
+    actions:[GameAiToggle(agent:widget.agent,compact:true),IconButton(tooltip:'重新开始',onPressed:(){setState((){game=Gomoku();tip='新的一局开始了';});widget.agent.gameEvent('五子棋重新开局');},icon:const Icon(Icons.refresh))],
     child:Column(mainAxisAlignment:MainAxisAlignment.center,children:[
       const Padding(padding:EdgeInsets.all(10),child:Text('你：⚫ 黑棋　 AI：⚪ 白棋',style:TextStyle(fontSize:16,fontWeight:FontWeight.bold))),
       LayoutBuilder(builder:(context,c){
@@ -92,7 +94,7 @@ class _FlightPageState extends State<FlightPage>{
     setState((){die=game.roll();options=game.humanOptions(die);});
     if(options.isEmpty){
       final ai=game.aiTurn();
-      widget.agent.event('飞行棋：你掷出$die点，没有可移动飞机。$ai');
+      widget.agent.gameEvent('飞行棋：你掷出$die点，没有可移动飞机。$ai');
       setState((){die=0;});
     }
   }
@@ -100,7 +102,7 @@ class _FlightPageState extends State<FlightPage>{
     final s=game.humanMove(die,idx);
     final ai=game.over ? game.winner : game.aiTurn();
     setState((){die=0;options=[];});
-    widget.agent.event('飞行棋：$s。$ai');
+    widget.agent.gameEvent('飞行棋：$s。$ai');
   }
   Widget fleet(String label,List<int> positions,Color color)=>Card(color:color.withValues(alpha:.15),child:Padding(padding:const EdgeInsets.all(12),child:Column(children:[
     Text(label,style:const TextStyle(fontWeight:FontWeight.bold)),
@@ -111,7 +113,7 @@ class _FlightPageState extends State<FlightPage>{
     ])),
   ])));
   @override Widget build(BuildContext context)=>CompanionScaffold(title:'✈️ 双人飞行棋',agent:widget.agent,
-    actions:[IconButton(onPressed:()=>setState((){game=FlightChess();die=0;options=[];}),icon:const Icon(Icons.refresh))],
+    actions:[GameAiToggle(agent:widget.agent,compact:true),IconButton(onPressed:()=>setState((){game=FlightChess();die=0;options=[];}),icon:const Icon(Icons.refresh))],
     child:ListView(padding:const EdgeInsets.all(16),children:[
       const Text('轻量规则：6点起飞，双方各两架飞机，走满24格到达终点，落在对方飞机位置可将其送回机库。',style:TextStyle(color:Colors.black54,fontSize:12)),
       const SizedBox(height:10),fleet('你 · 粉色战机',game.human,const Color(0xFFDA789F)),
@@ -140,7 +142,7 @@ class _MonopolyPageState extends State<MonopolyPage>{
     final a=game.turn(0,buy:buy);
     final b=game.finished?'':game.turn(1,buy:true);
     setState((){});
-    widget.agent.event('你和${widget.agent.roleName}在虚拟大富翁：$a。$b。当前虚拟资金你${game.balances[0]}星币，AI ${game.balances[1]}星币');
+    widget.agent.gameEvent('你和${widget.agent.roleName}在虚拟大富翁：$a。$b。当前虚拟资金你${game.balances[0]}星币，AI ${game.balances[1]}星币');
   }
   int? tileIndex(int row,int col){
     if(row==0)return col;
@@ -150,7 +152,7 @@ class _MonopolyPageState extends State<MonopolyPage>{
     return null;
   }
   @override Widget build(BuildContext context)=>CompanionScaffold(title:'🏠 星币大富翁',agent:widget.agent,
-    actions:[IconButton(onPressed:()=>setState(()=>game=TinyMonopoly()),icon:const Icon(Icons.refresh))],
+    actions:[GameAiToggle(agent:widget.agent,compact:true),IconButton(onPressed:()=>setState(()=>game=TinyMonopoly()),icon:const Icon(Icons.refresh))],
     child:ListView(padding:const EdgeInsets.all(12),children:[
       Row(mainAxisAlignment:MainAxisAlignment.spaceAround,children:[
         Text('你：${game.balances[0]} ⭐',style:const TextStyle(fontWeight:FontWeight.bold)),
@@ -177,5 +179,35 @@ class _MonopolyPageState extends State<MonopolyPage>{
       if(game.log.isNotEmpty)for(final line in game.log.take(5))ListTile(dense:true,leading:const Icon(Icons.receipt_long,size:16),title:Text(line,style:const TextStyle(fontSize:12))),
       const Text('仅使用本地虚拟星币，无支付、充值和实际交易。',style:TextStyle(fontSize:11,color:Colors.black54)),
     ]),
+  );
+}
+
+
+/// Per-character paid API switch, shared by all three games.
+class GameAiToggle extends StatelessWidget {
+  final CompanionController agent;
+  final bool compact;
+  const GameAiToggle({super.key, required this.agent, this.compact = false});
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: agent,
+    builder: (context, _) => compact
+      ? Row(mainAxisSize: MainAxisSize.min, children: [
+          const Text('AI', style: TextStyle(fontSize: 11)),
+          Switch.adaptive(value: agent.gameAiEnabled, onChanged: (value) {
+            agent.setGameAiEnabled(value);
+            CompanionStorage().setGameAiEnabled(agent.roleId, value);
+          }),
+        ])
+      : SwitchListTile.adaptive(
+          secondary: const Icon(Icons.savings_outlined),
+          title: const Text('每回合 AI 实时评论（付费）'),
+          subtitle: const Text('默认关闭：只由本地引擎下棋，不会每步扣 API 费用；开启后每回合最多一次，仍有请求冷却。'),
+          value: agent.gameAiEnabled,
+          onChanged: (value) {
+            agent.setGameAiEnabled(value);
+            CompanionStorage().setGameAiEnabled(agent.roleId, value);
+          },
+        ),
   );
 }

@@ -7,6 +7,8 @@ import 'package:flutter/material.dart';
 import 'app_controller.dart';
 import 'models.dart';
 import 'ui_shell.dart';
+import 'v39/desktop_icon_settings.dart';
+import 'v39/font_import_policy.dart';
 
 class MomentsTab extends StatefulWidget {
   final AppController controller;
@@ -298,13 +300,18 @@ class SettingsScreen extends StatelessWidget {
       final picked = await FilePicker.pickFile(type: FileType.custom,
         allowedExtensions: ['ttf', 'otf']);
       if (picked == null) return;
-      final length = await picked.length();
-      if (length != null && length > 12 * 1024 * 1024) {
-        throw const FormatException('字体文件超过 12MB');
-      }
+      final validation = FontImportPolicy.validate(
+        filename: picked.name, bytes: await picked.length());
+      if (validation != null) throw FormatException(validation);
       final path = await controller.local.copyIntoApp(picked, 'fonts');
+      final saved = controller.local.resolve(path);
+      final savedSize = await saved.length();
+      if (savedSize == 0 || savedSize > FontImportPolicy.maxBytes) {
+        await saved.delete();
+        throw const FormatException('字体为空或超过 50 MB，未保存。');
+      }
       controller.setFontPath(path);
-      if (context.mounted) uiError(context, '字体已导入，重新打开应用后生效');
+      if (context.mounted) uiError(context, '字体已导入（最多 50 MB），重新打开应用后生效');
     } catch (e) { if (context.mounted) uiError(context, e); }
   }
 
@@ -342,6 +349,17 @@ class SettingsScreen extends StatelessWidget {
           ListTile(title: const Text('恢复默认壁纸'),
             onTap: () => controller.changeAppearance(wallpaper: '')),
         const Divider(),
+        ListTile(leading: const Icon(Icons.aspect_ratio_outlined),
+          title: const Text('桌面图标大小'),
+          subtitle: const Text('自定义 70%～150%，保存后返回桌面即时生效'),
+          trailing: const Icon(Icons.tune),
+          onTap: () async {
+            final value = await showDialog<double>(context: context,
+              builder: (_) => const DesktopIconSizeDialog());
+            if (value != null && context.mounted) {
+              uiError(context, '桌面图标已调整为 ${(value * 100).round()}%');
+            }
+          }),
         ListTile(leading: const Icon(Icons.drag_indicator),
           title: const Text('恢复桌面默认排列'),
           subtitle: const Text('长按桌面图标可拖动调整位置'),
@@ -385,7 +403,7 @@ class SettingsScreen extends StatelessWidget {
             value: controller.data.fontScale.clamp(.85, 1.35).toDouble(),
             onChanged: (value) => controller.changeAppearance(scale: value))),
         ListTile(leading: const Icon(Icons.font_download_outlined),
-          title: const Text('导入本地 TTF / OTF 字体'),
+          title: const Text('导入本地 TTF / OTF 字体（≤50 MB）'),
           subtitle: Text(controller.data.fontPath.isEmpty ? '使用系统字体' : '已导入自定义字体；重启生效'),
           onTap: () => _pickFont(context)),
         if (controller.data.fontPath.isNotEmpty)

@@ -28,10 +28,15 @@ class _CutePetArtState extends State<CutePetArt> with SingleTickerProviderStateM
         child: child,
       ),
     ),
-    child: CustomPaint(
-      painter:_CritterPainter(species:widget.species, mood:widget.mood, egg:widget.egg, eggTheme:widget.eggTheme, strokes:widget.strokes),
-      size:const Size(236,236),
-    ),
+    child: SizedBox(width: 236, height: 236,
+      child: Stack(children: [
+        CustomPaint(
+          painter:_CritterPainter(species:widget.species, mood:widget.mood, egg:widget.egg, eggTheme:widget.eggTheme, strokes:widget.strokes),
+          size:const Size(236,236)),
+        if (!widget.egg && widget.species != null) Positioned(
+          right: 3, bottom: 4,
+          child: Text(widget.species!.emoji, style:const TextStyle(fontSize: 33))),
+      ])),
   );
 }
 
@@ -43,7 +48,6 @@ class _CritterPainter extends CustomPainter {
   const _CritterPainter({this.species, required this.mood, required this.egg, this.eggTheme='云朵蛋', required this.strokes});
   @override void paint(Canvas c, Size size) {
     c.save(); c.scale(size.width/236, size.height/236);
-    final bg = Paint()..color=const Color(0x25FFFFFF);
     c.drawOval(const Rect.fromLTWH(24,211,190,17),Paint()..color=const Color(0x1C726680));
     if (egg) {
       final shape = Path()..moveTo(117,26)..cubicTo(78,27,55,87,53,143)..cubicTo(48,195,81,216,118,215)..cubicTo(161,214,187,192,180,145)..cubicTo(179,87,157,27,117,26)..close();
@@ -70,6 +74,28 @@ class _CritterPainter extends CustomPainter {
     }
     final hex=species?.color ?? 'FFEDBDCE';
     final color=Color(int.parse(hex,radix:16));
+    final tier = species?.rarity ?? 'white';
+    if (tier != 'white') {
+      final aura = tier == 'green' ? const Color(0xFF82BCA4) :
+        tier == 'gold' ? const Color(0xFFF1C45B) : const Color(0xFFE76584);
+      c.drawCircle(const Offset(117, 134), 94,
+        Paint()..color=aura.withValues(alpha:.23)
+          ..maskFilter=const MaskFilter.blur(BlurStyle.normal, 16));
+      c.drawCircle(const Offset(117, 134), 88,
+        Paint()..color=aura.withValues(alpha:.6)
+          ..style=PaintingStyle.stroke..strokeWidth=2.8);
+      if (tier == 'gold' || tier == 'red') {
+        for (final pair in [const Offset(23,63),const Offset(204,83),
+          const Offset(200,185),const Offset(37,188)]) {
+          _star(c,pair.dx,pair.dy,tier=='red'?13:9,aura);
+        }
+      }
+      if (tier == 'red') {
+        final crown=Path()..moveTo(85,55)..lineTo(92,15)..lineTo(113,35)
+          ..lineTo(131,11)..lineTo(147,34)..lineTo(156,15)..lineTo(161,55)..close();
+        c.drawPath(crown,Paint()..color=const Color(0xFFE9B44E));
+      }
+    }
     final dark=Color.lerp(color,const Color(0xFF726D80),0.2)!;
     final ear=Paint()..color=color;
     final id=species?.id ?? 'cat';

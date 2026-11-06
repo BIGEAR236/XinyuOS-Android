@@ -10,5 +10,9 @@ class CompanionStorage {
     try { return PetState.fromJson(jsonDecode(raw) as Map<String,dynamic>); }
     catch (_) { return PetState(); }
   }
+  Future<bool> getGameAiEnabled(String roleId) async =>
+      await prefs.getBool('intimacy.gameAi.$roleId') ?? false;
+  Future<void> setGameAiEnabled(String roleId, bool enabled) =>
+      prefs.setBool('intimacy.gameAi.$roleId', enabled);
   Future<void> setPet(String roleId, PetState pet) => prefs.setString('intimacy.pet.$roleId',jsonEncode(pet.toJson()));
 }

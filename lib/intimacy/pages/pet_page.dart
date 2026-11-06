@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../core/companion.dart';
 import '../core/pet_engine.dart';
@@ -25,12 +24,17 @@ class _PetPageState extends State<PetPage> {
   void save(){final p=pet;if(p!=null) storage.setPet(widget.agent.roleId,p);}
   void action(String value){
     final p=pet;if(p==null) return;
-    setState(()=>status=p.act(value,DateTime.now()));
+    final now=DateTime.now();
+    if (!p.canInteract(now)) {
+      setState(()=>status=p.act(value,now));
+      return;
+    }
+    setState(()=>status=p.act(value,now));
     save();widget.agent.event('你们共同照顾宠物。宠物：${p.kind?.name ?? p.egg}；性格：${p.kind?.trait ?? '尚未孵化'}；动作：$value；结果：$status；当前心情：${p.expression}。请围绕当前动作自然回应。');
   }
   Future<void> changeEgg() async {
     final next=await showModalBottomSheet<String>(context:context,builder:(context)=>SafeArea(child:Column(mainAxisSize:MainAxisSize.min,children:[
-      const ListTile(title:Text('选一颗等待孵化的蛋'),subtitle:Text('不同蛋拥有不同主题外观，不保证孵化哪一种宠物')),
+      const ListTile(title:Text('选一颗等待孵化的蛋'),subtitle:Text('颜色档概率：白70% · 绿24% · 金5% · 红1% ，主题只会改变同档宠物偏好')),
       for(final egg in ['云朵蛋','森林蛋','海洋蛋','星光蛋','梦幻蛋']) ListTile(
         title:Text(egg),leading:const Icon(Icons.egg_outlined),onTap:()=>Navigator.pop(context,egg)),
     ])));
@@ -64,7 +68,7 @@ class _PetPageState extends State<PetPage> {
   void hatch() {
     final p=pet;if(p==null)return;
     try {
-      final s=p.hatch(debugSkipTime:kDebugMode);
+      final s=p.hatch();
       setState(()=>status='哇！你们一起孵出了${s.name}！');save();
       widget.agent.event('宠物蛋孵化成功，出现一只${s.name}，性格${s.trait}，请和用户一起为它庆祝');
     } catch(e) { ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('$e'))); }
@@ -78,8 +82,8 @@ class _PetPageState extends State<PetPage> {
     final p=pet;
     return CompanionScaffold(title:'与${widget.agent.roleName}一起养宠物',agent:widget.agent,
       actions:[IconButton(tooltip:'宠物图鉴',onPressed:()=>showDialog<void>(context:context,builder:(context)=>AlertDialog(
-        title:const Text('15种萌宠图鉴'),content:SizedBox(width:320,height:390,child:ListView(children:[for(final s in petSpecies)
-          ListTile(leading:Text(s.emoji,style:const TextStyle(fontSize:25)),title:Text(s.name),subtitle:Text('${s.rarity} · ${s.trait}'))])),actions:[TextButton(onPressed:()=>Navigator.pop(context),child:const Text('关闭'))])),icon:const Icon(Icons.auto_stories_outlined))],
+        title:const Text('30种萌宠图鉴'),content:SizedBox(width:320,height:390,child:ListView(children:[for(final s in petSpecies)
+          ListTile(leading:Text(s.emoji,style:const TextStyle(fontSize:25)),title:Text(s.name),subtitle:Text('${rarityNames[s.rarity]} · ${s.trait} · 角色权重${s.weight}'))])),actions:[TextButton(onPressed:()=>Navigator.pop(context),child:const Text('关闭'))])),icon:const Icon(Icons.auto_stories_outlined))],
       child:p==null?const Center(child:CircularProgressIndicator()):ListView(padding:const EdgeInsets.symmetric(horizontal:16,vertical:18),children:[
         Card(color:const Color(0xFFFFF2FA),elevation:0,child:Padding(padding:const EdgeInsets.all(12),child:Column(children:[
           Text(p.isHatched ? '${p.kind?.emoji ?? ''} ${p.name} · Lv.${p.level}' : '${p.egg} · 等待孵化',style:const TextStyle(fontWeight:FontWeight.w700,fontSize:19)),
@@ -91,7 +95,8 @@ class _PetPageState extends State<PetPage> {
           if(!p.isHatched) ...[
             Row(children:[stat('亲密值',p.eggProgress,const Color(0xFFB77AA3)),const SizedBox(width:10),stat('陪伴值',p.affection,const Color(0xFF7B9CB9))]),
             const SizedBox(height:8),
-            const Text('达到80点亲密值，并陪伴满1小时后可孵化。Debug模式允许快速验收。',textAlign:TextAlign.center,style:TextStyle(fontSize:11,color:Colors.black54)),
+            Text('有效互动 ${p.interactionCount} / ${PetState.requiredInteractions} 次 · 下次互动倒计时：${(p.remainingCooldown(DateTime.now()).inMinutes + 1).clamp(0,60)} 分钟',textAlign:TextAlign.center),
+            const Text('孵化需≥80进度、至少6次有效互动，并经过现实24小时。每小时只能获得一次进度。',textAlign:TextAlign.center,style:TextStyle(fontSize:11,color:Colors.black54)),
             Row(mainAxisAlignment:MainAxisAlignment.center,children:[
               TextButton(onPressed:changeEgg,child:const Text('更换蛋壳主题')),
               const SizedBox(width:8),
@@ -101,6 +106,8 @@ class _PetPageState extends State<PetPage> {
             Row(children:[stat('饱足',100-p.hunger,const Color(0xFFE0A670)),const SizedBox(width:10),stat('心情',p.joy,const Color(0xFFB77AA3)),const SizedBox(width:10),stat('精力',p.energy,const Color(0xFF8CBAC6))]),
             const SizedBox(height:12),
             Text('Lv.${p.level} · 当前心情：${p.expression} · 经验 ${p.xp}/${p.level*90}'),
+            LinearProgressIndicator(value:p.xp/(p.level*90)),
+            Text('下一次有效照顾约 ${p.remainingCooldown(DateTime.now()).inMinutes + 1} 分钟后'),
           ],
         ]))),
         const SizedBox(height:12),
@@ -113,7 +120,7 @@ class _PetPageState extends State<PetPage> {
               onPressed:()=>s=='绘画'?drawEgg():action(s)),
         ]),
         const SizedBox(height:12),
-        const Text('每个 AI 好友有独立的宠物存档。宠物反应由本地数值驱动，角色的说话内容由右下方互动聊天触发。',style:TextStyle(color:Colors.black54,fontSize:12)),
+        const Text('每个 AI 好友有独立存档。每小时最多一次有效照顾；进度和等级存于本机。右下角圆形按钮打开聊天。',style:TextStyle(color:Colors.black54,fontSize:12)),
       ]),
     );
   }
