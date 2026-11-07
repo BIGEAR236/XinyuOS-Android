@@ -11,7 +11,7 @@ on:
       - '.github/workflows/android-build.yml'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   release-apk:
@@ -59,3 +59,12 @@ jobs:
           archive: false
           if-no-files-found: error
           retention-days: 30
+      # Public release asset: no login needed, mirror-friendly, phone browsers
+      # can download and install directly. Runs on the same commit's tag.
+      - name: Publish APK to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v4.1.0-b${{ github.run_number }}
+          name: 心屿OS 4.1.0 构建 ${{ github.run_number }}
+          body: 正式签名 APK，覆盖安装即可（不要卸载）。对应提交 ${{ github.sha }}。
+          files: build/app/outputs/flutter-apk/app-release.apk
