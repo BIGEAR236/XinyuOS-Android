@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'app_controller.dart';
 import 'models.dart';
 import 'ui_shell.dart';
+import 'v41/settings_home.dart';
 import 'v39/desktop_icon_settings.dart';
 import 'v39/font_import_policy.dart';
 
@@ -77,7 +78,7 @@ class _MomentsTabState extends State<MomentsTab> {
             const Text('朋友圈互动设置',
               style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
             SwitchListTile(title: const Text('允许 AI 定期发布朋友圈（前台）'),
-              subtitle: const Text('默认关闭。只有你打开应用时检查，到期后最多生成一条；每位角色仍需单独授权。模型请求会产生费用。'),
+              subtitle: const Text('默认关闭。打开后会将相关聊天片段发给该角色的模型以生成虚拟动态；可能产生额外 API 费用。关闭 App 时不会后台生成。'),
               value: controller.data.autoMomentPosting,
               onChanged: (value) {
                 controller.setAutoMomentPosting(value);
@@ -95,7 +96,7 @@ class _MomentsTabState extends State<MomentsTab> {
                     refresh(() {});
                   })),
             SwitchListTile(title: const Text('打开朋友圈时自动邀请好友互动'),
-              subtitle: const Text('默认关闭。仅在进入朋友圈时触发，最多每小时 1 条动态、2 位 AI。'),
+              subtitle: const Text('默认关闭。启用后在 App 前台按随机时间检查；最多每小时 1 条动态、2 位 AI，可能产生 API 费用。'),
               value: controller.data.autoMomentInteractions,
               onChanged: (value) {
                 controller.setAutoMomentInteractions(value);
@@ -272,153 +273,12 @@ class _MomentsTabState extends State<MomentsTab> {
   );
 }
 
+/// Organized into the three pages requested by the user; appearance data
+/// continues to use the existing AppController fields and local file storage.
 class SettingsScreen extends StatelessWidget {
   final AppController controller;
-  const SettingsScreen({super.key, required this.controller});
-
-  Future<void> _wallpaper(BuildContext context) async {
-    try {
-      final file = await FilePicker.pickFile(type: FileType.image);
-      if (file == null) return;
-      final fileSize = await file.length();
-      if (fileSize != null && fileSize > 12 * 1024 * 1024) {
-        throw const FormatException('壁纸文件不能超过 12 MB。');
-      }
-      final path = await controller.local.copyIntoApp(file, 'wallpapers');
-      final savedFile = controller.local.resolve(path);
-      if (await savedFile.length() > 12 * 1024 * 1024) {
-        await savedFile.delete();
-        throw const FormatException('壁纸文件不能超过 12 MB。');
-      }
-      controller.changeAppearance(wallpaper: path);
-      if (context.mounted) uiError(context, '壁纸已更新');
-    } catch (e) { if (context.mounted) uiError(context, e); }
-  }
-
-  Future<void> _pickFont(BuildContext context) async {
-    try {
-      final picked = await FilePicker.pickFile(type: FileType.custom,
-        allowedExtensions: ['ttf', 'otf']);
-      if (picked == null) return;
-      final validation = FontImportPolicy.validate(
-        filename: picked.name, bytes: await picked.length());
-      if (validation != null) throw FormatException(validation);
-      final path = await controller.local.copyIntoApp(picked, 'fonts');
-      final saved = controller.local.resolve(path);
-      final savedSize = await saved.length();
-      if (savedSize == 0 || savedSize > FontImportPolicy.maxBytes) {
-        await saved.delete();
-        throw const FormatException('字体为空或超过 50 MB，未保存。');
-      }
-      controller.setFontPath(path);
-      if (context.mounted) uiError(context, '字体已导入（最多 50 MB），重新打开应用后生效');
-    } catch (e) { if (context.mounted) uiError(context, e); }
-  }
-
-  Future<void> _iconImage(BuildContext context, String id) async {
-    try {
-      final file = await FilePicker.pickFile(type: FileType.image);
-      if (file == null) return;
-      final length = await file.length();
-      if (length != null && length > 6 * 1024 * 1024) {
-        throw const FormatException('桌面图标图片不能超过 6MB。');
-      }
-      final relative = await controller.local.copyIntoApp(file, 'icons');
-      final saved = controller.local.resolve(relative);
-      if (await saved.length() > 6 * 1024 * 1024) {
-        await saved.delete();
-        throw const FormatException('桌面图标图片不能超过 6MB。');
-      }
-      controller.setDesktopIcon(id, relative);
-      if (context.mounted) uiError(context, '已更新桌面图标');
-    } catch (e) { if (context.mounted) uiError(context, e); }
-  }
-
-  @override
-  Widget build(BuildContext context) => AnimatedBuilder(animation: controller,
-    builder: (context, _) => Scaffold(appBar: AppBar(title: const Text('系统设置')),
-      body: ListView(children: [
-        const ListTile(title: Text('虚拟手机外观'),
-          subtitle: Text('这些设置只影响心屿 OS 应用内的虚拟桌面。')),
-        ListTile(leading: const Icon(Icons.wallpaper_outlined),
-          title: const Text('上传本地壁纸'),
-          subtitle: const Text('从手机文件或相册选择一张图'),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: () => _wallpaper(context)),
-        if (controller.data.wallpaperPath.isNotEmpty)
-          ListTile(title: const Text('恢复默认壁纸'),
-            onTap: () => controller.changeAppearance(wallpaper: '')),
-        const Divider(),
-        ListTile(leading: const Icon(Icons.aspect_ratio_outlined),
-          title: const Text('桌面图标大小'),
-          subtitle: const Text('自定义 70%～150%，保存后返回桌面即时生效'),
-          trailing: const Icon(Icons.tune),
-          onTap: () async {
-            final value = await showDialog<double>(context: context,
-              builder: (_) => const DesktopIconSizeDialog());
-            if (value != null && context.mounted) {
-              uiError(context, '桌面图标已调整为 ${(value * 100).round()}%');
-            }
-          }),
-        ListTile(leading: const Icon(Icons.drag_indicator),
-          title: const Text('恢复桌面默认排列'),
-          subtitle: const Text('长按桌面图标可拖动调整位置'),
-          onTap: controller.resetDesktopOrder),
-        const ListTile(title: Text('自定义虚拟手机桌面图标'),
-          subtitle: Text('点击以下应用可上传 PNG / JPG 等图片；不会修改安卓系统桌面图标。')),
-        ...[('chat', '心屿通讯'), ('api', 'API 连接'),
-          ('music', '本地音乐'), ('settings', '设置'), ('album', '相册'),
-          ('memo', '备忘录'), ('diary', '日记'), ('world', '虚拟世界')].map((item) {
-          final path = controller.data.desktopIcons[item.$1];
-          final img = path == null || path.isEmpty ? null : controller.local.resolve(path);
-          return ListTile(
-            leading: img != null && img.existsSync()
-                ? ClipRRect(borderRadius: BorderRadius.circular(8),
-                    child: Image.file(img, width: 39, height: 39, fit: BoxFit.cover))
-                : const Icon(Icons.apps_rounded),
-            title: Text(item.$2),
-            subtitle: const Text('更换桌面图标'),
-            trailing: img == null ? const Icon(Icons.chevron_right) :
-                IconButton(onPressed: () => controller.clearDesktopIcon(item.$1),
-                  tooltip: '恢复默认图标', icon: const Icon(Icons.restore)),
-            onTap: () => _iconImage(context, item.$1),
-          );
-        }),
-        SwitchListTile(secondary: const Icon(Icons.dark_mode_outlined),
-          title: const Text('深色模式'), value: controller.data.darkMode,
-          onChanged: (value) => controller.changeAppearance(dark: value)),
-        const Divider(),
-        const ListTile(title: Text('主题颜色')),
-        Padding(padding: const EdgeInsets.symmetric(horizontal: 15),
-          child: Wrap(spacing: 12, children: [0xFF8870B5, 0xFF5E9B8E,
-            0xFF568AB7, 0xFFCF8A86, 0xFFDA9B61].map((value) =>
-              ChoiceChip(label: const SizedBox(width: 15, height: 15),
-                avatar: CircleAvatar(backgroundColor: Color(value)),
-                selected: controller.data.themeColor == value,
-                onSelected: (_) => controller.changeAppearance(color: value))).toList())),
-        const Divider(),
-        ListTile(title: const Text('字体大小'),
-          subtitle: Text('当前 ${(controller.data.fontScale * 100).round()}%')),
-        Padding(padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: Slider(min: .85, max: 1.35, divisions: 10,
-            value: controller.data.fontScale.clamp(.85, 1.35).toDouble(),
-            onChanged: (value) => controller.changeAppearance(scale: value))),
-        ListTile(leading: const Icon(Icons.font_download_outlined),
-          title: const Text('导入本地 TTF / OTF 字体（≤50 MB）'),
-          subtitle: Text(controller.data.fontPath.isEmpty ? '使用系统字体' : '已导入自定义字体；重启生效'),
-          onTap: () => _pickFont(context)),
-        if (controller.data.fontPath.isNotEmpty)
-          ListTile(title: const Text('恢复系统字体'),
-            onTap: () => controller.setFontPath('')),
-        const Divider(),
-        const ListTile(leading: Icon(Icons.lock_outline), title: Text('隐私和存储'),
-          subtitle: Text('角色、普通聊天与动态保存在应用私有目录；'
-            'API 密钥存储于 Android Keystore / iOS Keychain。'
-            '本版本没有跨设备同步，也没有自动云端备份功能。')),
-        const ListTile(leading: Icon(Icons.cloud_outlined), title: Text('不部署应用服务器'),
-          subtitle: Text('但真实 AI 回复仍需要联网调用第三方模型 API，'
-            '并可能产生服务商费用。')),
-      ])));
+  const SettingsScreen({super.key,required this.controller});
+  @override Widget build(BuildContext context)=>XySettingsHome(controller:controller);
 }
 
 /// Compact player stays mounted in chat/social routes. It reads the shared

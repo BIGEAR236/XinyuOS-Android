@@ -1,0 +1,15 @@
+【不要覆盖你现有的 pubspec.yaml】
+只在 dependencies: 下新增：
+  record: ^6.2.1
+
+【不要覆盖你现有的 AndroidManifest.xml】
+只在 <manifest> 下、<application> 外添加：
+  <uses-permission android:name="android.permission.RECORD_AUDIO" />
+如已存在则无需重复。建议 Android minSdk 不低于 23。
+
+原有 name: xinyu_os / flutter_secure_storage / http / file_picker /
+just_audio / video_player / shared_preferences 等全部保留。
+
+数字人默认关闭；角色主聊天 API 仍使用原 AppController 和绑定模型。
+图片生成、STT、TTS 的 API Key 在数字人配置页分别保存。
+音色样本导入不等于完成克隆训练；应只使用得到授权的声音。

@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:file_picker/file_picker.dart';
 
@@ -13,10 +14,12 @@ import 'ui_contacts.dart';
 import 'ui_extras.dart';
 import 'ui_social_settings.dart';
 import 'ui_local_apps.dart';
-import 'ui_world.dart';
 import 'v39/desktop_icon_settings.dart';
 import 'v39/app_launch_care.dart';
 import 'v40/wallet_page.dart';
+import 'v40/marketplace_page.dart';
+import 'v41/desktop_grid.dart';
+import 'v41/collections_pages.dart';
 
 void uiError(BuildContext context, Object error) {
   if (!context.mounted) return;
@@ -63,17 +66,48 @@ class PhoneHomeScreen extends StatefulWidget {
   State<PhoneHomeScreen> createState() => _PhoneHomeScreenState();
 }
 
-class _PhoneHomeScreenState extends State<PhoneHomeScreen> {
+class _PhoneHomeScreenState extends State<PhoneHomeScreen>
+    with WidgetsBindingObserver {
+  Timer? _socialTimer;
+  final _random = math.Random();
+  void _planSocial() {
+    _socialTimer?.cancel();
+    // Foreground only, randomized 25-50 minute intervals and existing hourly caps.
+    _socialTimer = Timer(Duration(minutes:25+_random.nextInt(26)),() {
+      if(!mounted)return;
+      _checkSocial();
+      _planSocial();
+    });
+  }
+  void _checkSocial() {
+    if(controller.data.autoMomentPosting) {
+      unawaited(controller.maybeAutoPostMoment().catchError((Object _) {}));
+    }
+    if(controller.data.autoMomentInteractions) {
+      unawaited(controller.maybeAutoSocialSweep().catchError((Object _) {}));
+    }
+  }
+  @override void didChangeAppLifecycleState(AppLifecycleState state) {
+    if(state==AppLifecycleState.resumed) _checkSocial();
+  }
+  @override void dispose() {
+    _socialTimer?.cancel();WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
   AppController get controller => widget.controller;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    unawaited(XyDesktopSlots.load());
+    _planSocial();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       // Generate an authorized, due AI message without making the popup wait
       // for a network call; the popup itself is always a local reminder.
       unawaited(controller.processDueEvents().catchError((Object _) {}));
+      _checkSocial();
       unawaited(AppLaunchCarePrompt.checkAndShow(context, controller)
         .catchError((Object _) {}));
     });
@@ -86,62 +120,37 @@ class _PhoneHomeScreenState extends State<PhoneHomeScreen> {
     late final Widget destination;
     switch (key) {
       case 'chat':
-        icon = Icons.chat_bubble_rounded; title = '心屿通讯';
-        color = const Color(0xFF78BBA1);
-        destination = SocialScreen(controller: controller); break;
+        icon=Icons.chat_bubble_rounded; title='心屿通讯';
+        color=const Color(0xFF90BDAE); destination=SocialScreen(controller:controller); break;
       case 'api':
-        icon = Icons.hub_rounded; title = 'API 连接';
-        color = const Color(0xFF809AD2);
-        destination = ApiProfileListScreen(controller: controller); break;
+        icon=Icons.hub_rounded; title='API 连接';
+        color=const Color(0xFF9AABDC); destination=ApiProfileListScreen(controller:controller); break;
       case 'music':
-        icon = Icons.music_note_rounded; title = '本地音乐';
-        color = const Color(0xFFCA8DA6);
-        destination = MusicScreen(controller: controller); break;
+        icon=Icons.music_note_rounded;title='本地音乐';
+        color=const Color(0xFFD49CB3);destination=MusicScreen(controller:controller);break;
+      case 'video':
+        icon=Icons.play_circle_rounded;title='本地视频';
+        color=const Color(0xFFB1A5D5);destination=XyVideoLibraryPage(controller:controller);break;
       case 'album':
-        icon = Icons.photo_library_outlined; title = '相册';
-        color = const Color(0xFF95AFCD);
-        destination = LocalAlbumScreen(controller: controller); break;
+        icon=Icons.face_3_rounded;title='数字人图库';
+        color=const Color(0xFFD6A9BE);destination=XyDigitalGalleryPage(controller:controller);break;
       case 'memo':
-        icon = Icons.note_alt_outlined; title = '备忘录';
-        color = const Color(0xFFE6C28B);
-        destination = LocalNotesScreen(controller: controller, category: 'memo'); break;
+        icon=Icons.note_alt_rounded;title='备忘录';
+        color=const Color(0xFFE4BC92);
+        destination=XyNotebookShell(notebookKey:'memo.me',title:'我的备忘录',
+          child:LocalNotesScreen(controller:controller,category:'memo'));break;
       case 'diary':
-        icon = Icons.auto_stories_outlined; title = '日记';
-        color = const Color(0xFFC79CBB);
-        destination = LocalNotesScreen(controller: controller, category: 'diary'); break;
-      case 'world':
-        icon=Icons.auto_awesome_outlined; title='虚拟世界';
-        color=const Color(0xFF8D7CCA);
-        destination=WorldHubScreen(controller:controller); break;
+        icon=Icons.auto_stories_rounded;title='日记';
+        color=const Color(0xFFC59FC3);destination=XyDiaryLibraryPage(controller:controller);break;
       default:
-        icon = Icons.settings_rounded; title = '设置';
-        color = const Color(0xFF8B8C98);
-        destination = SettingsScreen(controller: controller); break;
+        icon=Icons.settings_rounded;title='设置';
+        color=const Color(0xFF8E99AB);destination=SettingsScreen(controller:controller);break;
     }
-    Widget item() => HomeIcon(icon: icon, name: title, color: color,
-      iconScale: DesktopIconScale.current.value,
-      iconPath: controller.data.desktopIcons[key], local: controller.local,
-      onTap: () => Navigator.push(context,
-        MaterialPageRoute(builder: (_) => destination)));
-    return DragTarget<String>(
-      onWillAcceptWithDetails: (details) => details.data != key &&
-        defaultDesktopOrder.contains(details.data),
-      onAcceptWithDetails: (details) =>
-        controller.reorderDesktopIcon(details.data, key),
-      builder: (context, incoming, rejected) => AnimatedContainer(
-        duration: const Duration(milliseconds: 160),
-        decoration: BoxDecoration(
-          color: incoming.isNotEmpty ? Colors.white24 : Colors.transparent,
-          borderRadius: BorderRadius.circular(16)),
-        child: LongPressDraggable<String>(
-          data: key, maxSimultaneousDrags: 1,
-          feedback: Material(type: MaterialType.transparency,
-            child: Opacity(opacity: .88, child: item())),
-          childWhenDragging: Opacity(opacity: .24, child: item()),
-          child: item(),
-        ),
-      ),
-    );
+    return FittedBox(fit:BoxFit.scaleDown,alignment:Alignment.topCenter,
+      child:HomeIcon(icon:icon,name:title,color:color,
+        iconScale:DesktopIconScale.current.value,
+        iconPath:controller.data.desktopIcons[key],local:controller.local,
+        onTap:()=>Navigator.push(context,MaterialPageRoute(builder:(_)=>destination))));
   }
 
   @override
@@ -172,18 +181,13 @@ class _PhoneHomeScreenState extends State<PhoneHomeScreen> {
             child: Column(children: [
               MiniPlayer(controller: controller),
               const SizedBox(height: 12),
-              ConstrainedBox(constraints: const BoxConstraints(maxWidth: 380),
-                child: ValueListenableBuilder<double>(
-                  valueListenable: DesktopIconScale.current,
-                  builder: (context, scale, _) => Wrap(
-                    spacing: (8 * scale).clamp(4.0, 12.0).toDouble(),
-                    runSpacing: (15 * scale).clamp(8.0, 22.5).toDouble(),
-                    alignment: WrapAlignment.center,
-                    children: normalizeDesktopOrder(controller.data.desktopOrder)
-                      .where((key) => !const {'wallet','pet','shop','watch'}.contains(key))
-                      .map((key) => _desktopTile(context, key)).toList()))),
+              ConstrainedBox(constraints:const BoxConstraints(maxWidth:420),
+                child:ValueListenableBuilder<double>(
+                  valueListenable:DesktopIconScale.current,
+                  builder:(context,scale,_)=>XyDesktopGrid(scale:scale,
+                    tileBuilder:(key)=>_desktopTile(context,key)))),
               const SizedBox(height: 18),
-              const Text('长按图标并拖到另一图标上，可调整桌面顺序',
+              const Text('长按图标，可自由拖到空位或与其他图标互换位置',
                 style: TextStyle(color: Colors.white70, fontSize: 11)),
             ]))),
           const SizedBox(height: 16),
@@ -248,6 +252,7 @@ class _SocialScreenState extends State<SocialScreen> with WidgetsBindingObserver
       if (mounted) {
         widget.controller.processDueEvents();
         widget.controller.maybeAutoPostMoment();
+        widget.controller.maybeAutoSocialSweep();
       }
     });
   }
@@ -256,6 +261,7 @@ class _SocialScreenState extends State<SocialScreen> with WidgetsBindingObserver
     if (state == AppLifecycleState.resumed) {
       widget.controller.processDueEvents();
       widget.controller.maybeAutoPostMoment();
+      widget.controller.maybeAutoSocialSweep();
     }
   }
   @override
@@ -349,7 +355,7 @@ class ChatListTab extends StatelessWidget {
           ChatScreen(controller: controller, group: group)))));
     }
     for (final friend in c) {
-      final thread = privateThread(friend.id);
+      final thread = controller.activePrivateThread(friend.id);
       final entries = controller.threadMessages(thread);
       rows.add((id: thread, title: friend.name,
         subtitle: entries.isEmpty ? '开始聊天' : entries.last.text,
@@ -413,6 +419,11 @@ class MyTab extends StatelessWidget {
       trailing: const Icon(Icons.chevron_right),
       onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) =>
         XyWalletPage(controller: controller)))),
+    ListTile(leading: const CircleAvatar(child: Icon(Icons.shopping_bag_outlined)),
+      title: const Text('星愿商城'),subtitle:const Text('虚拟金币购物与购物车'),
+      trailing:const Icon(Icons.chevron_right),
+      onTap:()=>Navigator.push(context,MaterialPageRoute(builder:(_)=>
+        XyMarketplacePage(controller:controller)))),
     const ListTile(leading: CircleAvatar(child: Icon(Icons.auto_awesome)),
       title: Text('心屿 OS'), subtitle: Text('V4.0 · 聊天内虚拟生活 · 本地优先')),
     const Divider(),

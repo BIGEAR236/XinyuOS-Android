@@ -132,9 +132,10 @@ class AppController extends ChangeNotifier {
     if (p == null) throw StateError('请先给${c.name}绑定模型。');
     final key = await getKey(p.id);
     if (key == null || key.isEmpty) throw StateError('请先填写 API Key。');
-    final recent = threadMessages(privateThread(c.id))
+    final recent = ([...threadMessages(privateThread(c.id)),
+      ...threadMessages('${privateThread(c.id)}:v41_story')])
       .where((m) => !m.recalled && m.senderId != 'system' && m.text.trim().isNotEmpty)
-      .toList();
+      .toList()..sort((a,b) => a.createdAt.compareTo(b.createdAt));
     if (recent.isEmpty) throw StateError('暂无可用于生成的聊天记录。');
     final excerpt = recent.length > 20 ? recent.sublist(recent.length - 20) : recent;
     final transcript = excerpt.map((m) =>
@@ -265,6 +266,20 @@ class AppController extends ChangeNotifier {
     return inviteMomentInteractions(eligible.id);
   }
 
+  /// Per-character mode, persisted inside the existing JSON-compatible
+  /// threadFormats dictionary. Old daily conversation IDs are untouched.
+  String roleChatMode(String id) {
+    final saved = data.threadFormats['v41.mode.$id'];
+    return saved == 'story' || saved == 'daily' ? saved : data.chatMode;
+  }
+  String activePrivateThread(String id) => roleChatMode(id) == 'story'
+    ? '${privateThread(id)}:v41_story' : privateThread(id);
+  void setRoleChatMode(String id, String mode) {
+    if (character(id) == null || !const {'daily','story'}.contains(mode)) return;
+    data.threadFormats = {...data.threadFormats, 'v41.mode.$id': mode};
+    _changed();
+  }
+
   void setChatMode(String value) {
     data.chatMode = value == 'story' ? 'story' : 'daily';
     _changed();
@@ -347,7 +362,7 @@ class AppController extends ChangeNotifier {
     if (p == null) return;
     final key = await getKey(p.id);
     if (key == null || key.isEmpty) return;
-    final thread = privateThread(c.id);
+    final thread = activePrivateThread(c.id);
     if (busy.contains(thread)) return;
     _proactiveRunning = true;
     ev.lastAttemptAt = now;
@@ -728,7 +743,7 @@ $context
       'pet': '一起养宠物', 'music': '一起听歌', 'watch': '一起看视频',
       'game': '一起玩游戏', 'story': '沉浸剧情',
     };
-    _addMessage(privateThread(characterId), 'me',
+    _addMessage(activePrivateThread(characterId), 'me',
       '💌 邀请${role.name}${names[activity]}（本地互动邀请）');
     _worldEvent('invite', '我邀请${role.name}${names[activity]}', characterId: characterId);
     return true;
@@ -740,8 +755,18 @@ $context
         !_spend(cost, '赠送虚拟礼物$gift给${role.name}', characterId: characterId)) {
       return false;
     }
-    _addMessage(privateThread(characterId), 'me', '🎁 我送给${role.name}一份虚拟礼物：$gift');
+    _addMessage(activePrivateThread(characterId), 'me', '🎁 我送给${role.name}一份虚拟礼物：$gift');
     _worldEvent('gift', '我送给${role.name}虚拟礼物：$gift', characterId: characterId);
+    return true;
+  }
+
+  /// The product was paid for during checkout, so do not charge coins again.
+  bool sendOwnedVirtualGift(String characterId, String productName) {
+    final role=character(characterId);
+    if(role==null||productName.trim().isEmpty)return false;
+    _addMessage(activePrivateThread(characterId),'me',
+      '🎁 送给${role.name}的礼物：$productName（来自我的已购商品）');
+    _worldEvent('gift','我将已购虚拟物品$productName赠给${role.name}',characterId:characterId);
     return true;
   }
 
@@ -826,7 +851,7 @@ $context
     final c = character(characterId);
     if (c == null || amount < 1 || amount > 500 ||
         !_spend(amount, '给${c.name}发送虚拟红包', characterId:characterId)) return false;
-    _addMessage(privateThread(characterId),'me','🧧 虚拟红包 $amount 星币：$note');
+    _addMessage(activePrivateThread(characterId),'me','🧧 虚拟红包 $amount 星币：$note');
     _changeRoleWallet(characterId, amount, 'received:user_red_packet');
     _worldEvent('gift','我给${c.name}送了 $amount 星币虚拟红包',characterId:characterId);
     return true;
@@ -897,8 +922,11 @@ $context
     final now=DateTime.now();
     for (final c in data.characters) {
       if (!c.allowMoments) continue;
+      if (await _chatPrefs.getBool('v41.roleMoment.${c.id}.enabled') != true) continue;
+      final roleHours=await _chatPrefs.getInt('v41.roleMoment.${c.id}.hours')
+        ?? data.autoMomentEveryHours;
       final last=DateTime.tryParse(data.lastAiPostAt[c.id] ?? '');
-      if (last!=null && now.difference(last).inHours<data.autoMomentEveryHours) continue;
+      if (last!=null && now.difference(last).inHours<roleHours) continue;
       data.lastAiPostAt={...data.lastAiPostAt,c.id:now.toIso8601String()};
       _changed(); // even if call fails, do not retry rapidly and waste tokens
       return generateMoment(c);
@@ -1001,7 +1029,7 @@ $context
       var content = _entryContext(entry);
       // Old V3.3 roleplay paragraphs can prime the model to continue acting.
       // Keep a concise context representation in daily-chat mode.
-      if (data.chatMode == 'daily' && entry.senderId == aiId) {
+      if (roleChatMode(aiId) == 'daily' && entry.senderId == aiId) {
         content = content.replaceAll(RegExp(r'（[^）]{0,400}）'), '')
           .replaceAll(RegExp(r'\([^)]{0,400}\)'), '').trim();
         if (content.length > 450) content = content.substring(0, 450);
@@ -1071,10 +1099,10 @@ $context
     if (turns.isEmpty) return '没有有效的用户消息。';
     final requestedMode = formatFor(thread);
     final latestUser = turns.last.text;
-    final wantsStory = data.chatMode == 'story' || RegExp(
+    final wantsStory = roleChatMode(c.id) == 'story' || RegExp(
       r'剧情格式|沉浸剧情|内心独白|好感度|醋意|场景状态|\*\*\d{2}:\d{2}\*\*').hasMatch(latestUser);
     final mode = wantsStory ? 'json' : requestedMode;
-    final bubbleCount = data.chatMode == 'daily' && !wantsStory
+    final bubbleCount = roleChatMode(c.id) == 'daily' && !wantsStory
       ? await replyBubbleCount(c.id) : 1;
     final run = _begin(thread);
     final client = http.Client(); _clients[thread] = client;
@@ -1089,7 +1117,7 @@ $context
       ].where((s) => s.trim().isNotEmpty).join('\n');
       var answer = await MultiModelApi.call(client: client, profile: p,
         apiKey: key, persona: c.persona, roleName: c.name,
-        turns: turns, chatMode: data.chatMode, formatMode: mode,
+        turns: turns, chatMode: roleChatMode(c.id), formatMode: mode,
         contextHint: context, onUsage: (u) => usage = u,
         onText: (text) { if (_current(thread,run)) _partial(thread,c.id,text); });
       if (!_current(thread,run)) return null;
@@ -1099,7 +1127,7 @@ $context
         _partial(thread,c.id,'正在修正 JSON 格式…');
         answer = await MultiModelApi.call(client: client, profile: p,
           apiKey: key, persona: c.persona, roleName: c.name,
-          chatMode: data.chatMode, formatMode: 'json',
+          chatMode: roleChatMode(c.id), formatMode: 'json',
           contextHint: context,
           turns: [...turns, ModelTurn('assistant', answer),
             const ModelTurn('user', '上条输出不是有效的 JSON。请保持原意，重新输出唯一一个合法 JSON 对象或数组，不带代码围栏或前言。')],
@@ -1130,7 +1158,7 @@ $context
   /// Re-answer, showing a fresh streaming bubble immediately. Old answers
   /// are stored as versions and restored only if the new request fails.
   Future<String?> regeneratePrivate(Character c) async {
-    final thread = privateThread(c.id);
+    final thread = activePrivateThread(c.id);
     if (busy.contains(thread)) stop(thread);
     final entries = threadMessages(thread);
     final lastUser = entries.lastIndexWhere((m) => m.senderId == 'me' && !m.recalled);
@@ -1158,7 +1186,7 @@ $context
   /// cancel first, remove dependent answers, then re-answer without adding a
   /// duplicated user message. Old stale network responses cannot reappear.
   Future<String?> editAndResendPrivate(Character c, String messageId, String text) async {
-    final thread = privateThread(c.id);
+    final thread = activePrivateThread(c.id);
     if (busy.contains(thread)) stop(thread);
     final message = data.messages.where((m) =>
         m.threadId == thread && m.id == messageId && m.senderId == 'me' && !m.recalled).firstOrNull;
@@ -1178,7 +1206,7 @@ $context
 
   Future<String?> sendPrivate(Character c, String text, {ChatEntry? quote,
       String contextHint = ''}) async {
-    final thread = privateThread(c.id);
+    final thread = activePrivateThread(c.id);
     if (busy.contains(thread)) return '请先停止上一条回复再发送。';
     final p = profile(c.apiProfileId);
     if (p == null) return '请先在好友资料中绑定 API 配置。';
@@ -1192,7 +1220,7 @@ $context
   /// Send image to a vision-capable model using provider-specific input blocks.
   /// Bytes never persist in JSON; only app-private file path is stored.
   Future<String?> sendPrivateImage(Character c, String relativePath) async {
-    final thread = privateThread(c.id);
+    final thread = activePrivateThread(c.id);
     if (busy.contains(thread)) return '上一条回复尚未完成。';
     final p = profile(c.apiProfileId);
     if (p == null) return '请先绑定模型。';
@@ -1301,11 +1329,22 @@ $context
     final client = http.Client();
     _clients[thread] = client;
     try {
+      final recent = <ChatEntry>[
+        ...threadMessages(privateThread(c.id)),
+        ...threadMessages('${privateThread(c.id)}:v41_story'),
+      ].where((e)=>!e.recalled && e.senderId!='system' && e.text.trim().isNotEmpty)
+        .toList()..sort((a,b)=>a.createdAt.compareTo(b.createdAt));
+      final excerpt = recent.length>6 ? recent.sublist(recent.length-6) : recent;
+      var summary = excerpt.map((e)=>
+        '${e.senderId=='me'?'用户':c.name}：${e.text.replaceAll(RegExp(r'\s+'),' ')}').join('；');
+      if(summary.length>900)summary=summary.substring(summary.length-900);
       final text = await MultiModelApi.call(client: client,
         profile: p, apiKey: key, persona: c.persona, roleName: c.name,
-        turns: [const ModelTurn('user',
+        turns: [ModelTurn('user',
           '请以当前角色第一人称写一条不超过 100 字的虚拟朋友圈动态。'
-          '符合性格，不要冒充在现实中做过未经证实的事。只输出正文。')]);
+          '可适度呼应下面最近的聊天心情或共同爱好，但不要直接复述聊天私密内容、隐私身份、地址、联系方式，也不要声称现实未发生的事。'
+          '自然、有生活感、不重复，必要时完全不提聊天内容。只输出正文。'
+          '${summary.isEmpty?'':'最近聊天参考：$summary'}')]);
       if (c.allowMoments && _current(thread,run)) {
         data.moments.insert(0, MomentEntry(id: newId(),
           characterId: c.id, text: text, createdAt: DateTime.now()));

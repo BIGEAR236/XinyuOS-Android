@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../app_controller.dart';
 import '../intimacy/app_role_responder.dart';
 import 'catalog.dart';
+import '../v41/gift_inventory.dart';
 
 /// This marketplace is entirely fictional: coins have no cash value,
 /// there is no real checkout, shipping, bank transfer or affiliate storefront.
@@ -240,6 +241,7 @@ class _XyMarketplacePageState extends State<XyMarketplacePage> {
         approvedMessage = response;
         payer = role.id;
       }
+      final purchasedSkuCounts=Map<String,int>.from(_cart);
       final summary = _cart.entries.map((e) =>
         '${xyProductById[e.key]!.name}×${e.value}').join('、');
       if (!widget.controller.payVirtualMarketplace(total,
@@ -258,6 +260,7 @@ class _XyMarketplacePageState extends State<XyMarketplacePage> {
         final previous = jsonDecode(saved);
         orders = previous is List ? previous : [];
       } catch (_) { orders = []; }
+      await XyGiftInventory.add(purchasedSkuCounts);
       orders.insert(0, {
         'date': DateTime.now().toIso8601String(),
         'items': summary, 'total': total, 'payer': payer,

@@ -11,6 +11,8 @@ import 'models.dart';
 import 'ui_chat.dart';
 import 'ui_extras.dart';
 import 'ui_shell.dart';
+import 'v41/digital_person_page.dart';
+import 'v41/role_moments_settings.dart';
 import 'v39/ai_journal_page.dart';
 import 'v39/my_moments_page.dart';
 
@@ -376,6 +378,11 @@ class CharacterDetailScreen extends StatelessWidget {
                   () => _open(context, CharacterModelBindingScreen(
                     controller: controller, characterId: c.id))),
                 const Divider(height: 1, indent: 57),
+                _section(context, Icons.face_3_outlined, '专属数字人',
+                  '导入形象 · 文生图 · 音色 · 独立开关',
+                  () => _open(context, DigitalPersonPage(
+                    controller: controller, roleId: c.id))),
+                const Divider(height: 1, indent: 57),
                 _section(context, Icons.people_outline, '添加好友关系',
                   '已关联 $relatedCount 位 AI 好友',
                   () => _open(context, CharacterFriendshipsScreen(
@@ -632,6 +639,7 @@ class CharacterMomentsScreen extends StatelessWidget {
             subtitle: const Text('默认关闭；仅按已授权的好友关系互动'),
             value: c.allowSocialInteractions,
             onChanged: (v) => controller.setSocialPermission(c.id, v)),
+          XyRoleMomentSettings(controller:controller,roleId:c.id),
           const Divider(),
           ListTile(title: const Text('这个角色的动态'),
             subtitle: Text('共 ${entries.length} 条')),
@@ -777,7 +785,7 @@ class _CharacterEditorScreenState extends State<CharacterEditorScreen> {
     finally { if (mounted) setState(() => _importingAvatar = false); }
   }
 
-  void _save() {
+  Future<void> _save() async {
     if (_name.text.trim().isEmpty || _persona.text.trim().isEmpty) {
       uiError(context, '请输入名字，并填写或导入人格内容。'); return;
     }
@@ -792,7 +800,22 @@ class _CharacterEditorScreenState extends State<CharacterEditorScreen> {
       chatBackgroundPath: widget.initial?.chatBackgroundPath ?? '',
       chatBackgroundOpacity: widget.initial?.chatBackgroundOpacity ?? .38);
     widget.controller.upsertCharacter(c);
-    Navigator.pop(context);
+    // Offer persona-based digital portrait creation only on first creation.
+    if (widget.initial != null) {
+      if (mounted) Navigator.pop(context);
+      return;
+    }
+    if (!mounted) return;
+    final openAvatar=await showDialog<bool>(context:context,builder:(ctx)=>AlertDialog(
+      title:const Text('创建这个角色的数字人吗？'),
+      content:const Text('可以使用刚刚导入的人格描述生成专属形象，也可以导入自己的图片和合法音色。数字人默认关闭，生成图片需要另行配置 API 并由你确认。'),
+      actions:[TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('以后再说')),
+        FilledButton(onPressed:()=>Navigator.pop(ctx,true),child:const Text('配置数字人'))]));
+    if(!mounted)return;
+    if(openAvatar==true){
+      Navigator.pushReplacement(context,MaterialPageRoute(builder:(_)=>
+        DigitalPersonPage(controller:widget.controller,roleId:c.id)));
+    }else{Navigator.pop(context);}
   }
 
   @override
@@ -860,7 +883,7 @@ class _CharacterEditorScreenState extends State<CharacterEditorScreen> {
             onSelected: (_) => setState(() => _avatarColor = v))).toList()),
         SwitchListTile(contentPadding: EdgeInsets.zero,
           title: const Text('允许发布朋友圈'),
-          subtitle: const Text('默认关闭；本版只支持手动触发生成'),
+          subtitle: const Text('默认关闭；需要再开启自动发布总开关及本角色随机发布选项'),
           value: _canPost, onChanged: (v) => setState(() => _canPost = v)),
         SwitchListTile(contentPadding: EdgeInsets.zero,
           title: const Text('允许朋友圈点赞与评论'),

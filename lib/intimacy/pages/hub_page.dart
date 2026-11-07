@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import '../core/companion.dart';
+import '../../app_controller.dart';
+import '../../v41/digital_call_page.dart';
 import '../core/media_engine.dart';
 import '../core/storage.dart';
 import 'game_page.dart';
@@ -11,12 +13,13 @@ import 'story_page.dart';
 /// State is scoped to roleId; never share a pet save between characters.
 class CompanionHub extends StatefulWidget {
   final String roleId, roleName;
+  final AppController? appController;
   final String persona;
   final String? initialActivity;
   final RoleResponder? responder;
   final MusicRoom? musicRoom;
   final void Function(String roleId, String description)? onLocalEvent;
-  const CompanionHub({super.key,required this.roleId,required this.roleName,this.persona='',this.initialActivity,this.responder,this.musicRoom,this.onLocalEvent});
+  const CompanionHub({super.key,required this.roleId,required this.roleName,this.appController,this.persona='',this.initialActivity,this.responder,this.musicRoom,this.onLocalEvent});
   @override State<CompanionHub> createState()=>_CompanionHubState();
 }
 class _CompanionHubState extends State<CompanionHub> {
@@ -39,16 +42,26 @@ class _CompanionHubState extends State<CompanionHub> {
     }
   }
   @override void dispose(){agent.dispose();if(ownsMusic)music.dispose();super.dispose();}
-  Widget? _activityPage(String kind) => switch (kind) {
-    'pet' => PetPage(agent: agent),
-    'music' => MusicPage(agent: agent, room: music),
-    'watch' => WatchPage(agent: agent),
-    'game' => GamesPage(agent: agent),
-    'story' => StoryPreviewPage(roleId: widget.roleId,
-      roleName: widget.roleName, persona: widget.persona,
-      responder: agent.responder),
-    _ => null,
-  };
+  Widget? _activityPage(String kind) {
+    final page=switch(kind) {
+      'pet'=>PetPage(agent:agent),
+      'music'=>MusicPage(agent:agent,room:music),
+      'watch'=>WatchPage(agent:agent),
+      'game'=>GamesPage(agent:agent),
+      _=>null,
+    };
+    if(page==null)return null;
+    return Stack(children:[Positioned.fill(child:page),
+      if(widget.appController!=null)Positioned(bottom:100,right:15,
+        child:FloatingActionButton.small(
+          heroTag:'digital_voice_${widget.roleId}_$kind',
+          tooltip:'数字人语音交流',
+          backgroundColor:const Color(0xFFD6B9DF),
+          onPressed:()=>Navigator.push(context,MaterialPageRoute(builder:(_)=>
+            DigitalCallPage(controller:widget.appController!,roleId:widget.roleId))),
+          child:const Icon(Icons.record_voice_over_outlined))),
+    ]);
+  }
   @override Widget build(BuildContext context)=>Scaffold(
     backgroundColor:const Color(0xFFFFFAFD),
     appBar:AppBar(title:Text('${widget.roleName} · 亲密互动'),backgroundColor:const Color(0xFFFFF6FB)),
@@ -61,17 +74,12 @@ class _CompanionHubState extends State<CompanionHub> {
         const Text('进入任一空间，右下角圆形按钮可展开聊天。游戏 AI 评论默认关闭，节省 API 费用。',style:TextStyle(fontSize:12)),
       ]))),
       const SizedBox(height:12),
-      _item('🥚','一起养宠物','彩绘蛋壳 · 30种宠物 · 现实时间冷却 · 等级成长',()=>PetPage(agent:agent)),
-      _item('🎵','一起听歌','本地音乐 · 同步 LRC 歌词 · 一边听一边说',()=>MusicPage(agent:agent,room:music)),
-      _item('🎬','一起看视频','本地视频 · SRT 字幕 · 边看边聊天',()=>WatchPage(agent:agent)),
-      _item('🎲','一起玩游戏','五子棋 · 飞行棋 · 星币大富翁',()=>GamesPage(agent:agent)),
-      _item('📝','沉浸剧情渲染','动作／对白／内心／状态 · 自动分层',()=>StoryPreviewPage(
-        roleId: widget.roleId, roleName:widget.roleName, persona:widget.persona,
-        responder: agent.responder,
-        client:agent.responder is CompatibleResponder?StoryApiClient(
-          endpoint:(agent.responder as CompatibleResponder).endpoint,
-          model:(agent.responder as CompatibleResponder).model,
-          apiKey:(agent.responder as CompatibleResponder).apiKey):null)),
+      _item('🥚','一起养宠物','彩绘蛋壳 · 30种宠物 · 现实时间冷却 · 等级成长',()=>_activityPage('pet')!),
+      _item('🎵','一起听歌','本地音乐 · 同步 LRC 歌词 · 一边听一边说',()=>_activityPage('music')!),
+      _item('🎬','一起看视频','本地视频 · SRT 字幕 · 边看边聊天',()=>_activityPage('watch')!),
+      _item('🎲','一起玩游戏','五子棋 · 飞行棋 · 星币大富翁',()=>_activityPage('game')!),
+      if(widget.appController!=null) _item('🧑🏻','数字人语音对话','点击开启录音 · 共用角色原有模型',
+        ()=>DigitalCallPage(controller:widget.appController!,roleId:widget.roleId)),
       const SizedBox(height:12),
       const Text('游戏每步 AI 评论默认关闭，可在游戏列表或棋盘里手动开启；手动聊天仍会调用模型。',style:TextStyle(fontSize:12,color:Colors.black54)),
     ]),

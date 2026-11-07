@@ -17,14 +17,33 @@ class GamesPage extends StatelessWidget {
       const Padding(padding:EdgeInsets.all(14),child:Text('游戏胜负和资金由本地代码决定，AI 只负责个性化聊天。飞行棋和大富翁目前属于可玩的轻量规则，不是商业桌游的完整复刻。',style:TextStyle(fontSize:12,color:Colors.black54))),
     ]),
   );
-  Widget _game(BuildContext context,String emoji,String title,String description,Widget Function() next)=>Card(
-    color:const Color(0xFFFDF0F7),elevation:0,child:ListTile(
-      leading:Text(emoji,style:const TextStyle(fontSize:30)),
-      title:Text(title,style:const TextStyle(fontWeight:FontWeight.bold)),
-      subtitle:Text(description),trailing:const Icon(Icons.chevron_right),
-      onTap:()=>Navigator.push(context,MaterialPageRoute(builder:(_)=>next())),
-    ),
-  );
+  Widget _game(BuildContext context,String emoji,String title,String description,Widget Function() next){
+    final colors=switch(title){
+      '五子棋'=>[const Color(0xFF6787BD),const Color(0xFFB2B7E1)],
+      '飞行棋'=>[const Color(0xFFDF8C9D),const Color(0xFFF3BF97)],
+      _=>[const Color(0xFF9B81CA),const Color(0xFFD5AFE3)],
+    };
+    return Padding(padding:const EdgeInsets.only(bottom:13),child:InkWell(
+      borderRadius:BorderRadius.circular(22),onTap:()=>Navigator.push(context,
+        MaterialPageRoute(builder:(_)=>next())),
+      child:Container(height:130,padding:const EdgeInsets.all(20),
+        decoration:BoxDecoration(borderRadius:BorderRadius.circular(22),
+          gradient:LinearGradient(colors:colors),
+          boxShadow:const [BoxShadow(color:Color(0x16876D91),blurRadius:14,offset:Offset(0,5))]),
+        child:Row(children:[
+          Container(width:83,height:83,alignment:Alignment.center,
+            decoration:BoxDecoration(color:Colors.white24,borderRadius:BorderRadius.circular(20)),
+            child:Text(emoji,style:const TextStyle(fontSize:51))),
+          const SizedBox(width:17),
+          Expanded(child:Column(mainAxisAlignment:MainAxisAlignment.center,
+            crossAxisAlignment:CrossAxisAlignment.start,children:[
+              Text(title,style:const TextStyle(fontSize:24,fontWeight:FontWeight.bold,color:Colors.white)),
+              const SizedBox(height:7),
+              Text(description,style:const TextStyle(fontSize:12,color:Colors.white)),
+            ])),
+          const Icon(Icons.arrow_forward_ios_rounded,color:Colors.white),
+        ]))));
+  }
 }
 
 class GomokuPage extends StatefulWidget {

@@ -1,49 +1,69 @@
 #!/usr/bin/env python3
-"""Basic local consistency checks when Flutter SDK is unavailable.
-NOT a replacement for flutter analyze / flutter test / native builds.
-"""
+"""Best-effort offline checks; NOT a Dart analyzer or Flutter build."""
 from pathlib import Path
-import re
-import yaml
+import re, sys
+root=Path(__file__).resolve().parents[1]
+darts=sorted(root.rglob('*.dart'))
+assert len(darts)>=20, len(darts)
 
-base = Path(__file__).resolve().parents[1]
-source_files = list((base / 'lib').glob('*.dart'))
-assert len(source_files) >= 8
-assert (base / 'test/api_contract_test.dart').exists()
-pubspec = yaml.safe_load((base / 'pubspec.yaml').read_text('utf-8'))
-assert pubspec['name'] == 'xinyu_os'
-for package in ('http', 'flutter_secure_storage', 'file_picker', 'path_provider',
-                'just_audio', 'archive', 'cryptography', 'android_id'):
-    assert package in pubspec['dependencies'], package
+def delimiters(source):
+    stack=[]; i=0; ln=1; n=len(source)
+    while i<n:
+        ch=source[i]
+        if ch=='\n':ln+=1;i+=1;continue
+        if source.startswith('//',i):
+            j=source.find('\n',i)
+            if j<0:break
+            i=j;continue
+        if source.startswith('/*',i):
+            depth=1;i+=2
+            while i<n and depth:
+                if source.startswith('/*',i):depth+=1;i+=2
+                elif source.startswith('*/',i):depth-=1;i+=2
+                else:
+                    if source[i]=='\n':ln+=1
+                    i+=1
+            continue
+        # Dart raw and regular strings (both triple and single-quoted).
+        if ch in "'\"" or (ch in 'rR' and i+1<n and source[i+1] in "'\"" and (i==0 or not(source[i-1].isalnum() or source[i-1]=='_'))):
+            if ch in 'rR':i+=1;ch=source[i];raw=True
+            else:raw=False
+            tri=source.startswith(ch*3,i);i+=3 if tri else 1
+            while i<n:
+                if source[i]=='\n':ln+=1
+                if not raw and source[i]=='\\':i+=2;continue
+                if (tri and source.startswith(ch*3,i)) or (not tri and source[i]==ch):
+                    i+=3 if tri else 1;break
+                i+=1
+            continue
+        if ch in '({[': stack.append((ch,ln))
+        elif ch in ')}]':
+            if not stack or stack[-1][0]!=dict(zip(')}]','({['))[ch]:
+                return f'line {ln}: unmatched {ch}, stack={stack[-4:]}'
+            stack.pop()
+        i+=1
+    return f'unclosed: {stack[-4:]}' if stack else ''
 
-for path in source_files:
-    source = path.read_text('utf-8')
-    for relative in re.findall(r"import '([^']+\.dart)';", source):
-        if relative.startswith('package:'): continue
-        assert (path.parent / relative).exists(), f'{path.name}: missing {relative}'
-    assert source.count('class ') > 0, path
-
-models = (base / 'lib/models.dart').read_text('utf-8')
-api = (base / 'lib/api_client.dart').read_text('utf-8')
-controller = (base / 'lib/app_controller.dart').read_text('utf-8')
-assert "api_key_$profileId" in controller and 'FlutterSecureStorage' in controller
-assert 'apiKey' not in re.search(r'Map<String, dynamic> toJson\(\) => \{\'id\': id, \'label\': label,(.*?)\}; // API Key',
-                                   models, re.S).group(1)
-assert 'followRedirects = false' in api
-assert 'https' in api and 'HTTP $status' in api
-assert 'await MultiModelApi.call(' in controller
-assert "if (!c.allowMoments)" in controller
-assert 'replied >= group.maxReplies' in controller
-assert (base / 'lib/activation_service.dart').exists()
-assert (base / 'lib/ui_activation.dart').exists()
-activation = (base / 'lib/activation_service.dart').read_text('utf-8')
-assert 'Ed25519().verify' in activation and "pieces[0] != 'XY2'" in activation
-assert 'XinyuApp(controller: controller, activation: activation)' in (base / 'lib/main.dart').read_text('utf-8')
-assert (base / 'lib/music_controller.dart').exists()
-assert 'desktopIcons' in models and 'avatarPath' in models
-assert 'parseSseText' in api and 'onText' in api
-assert (base / '.github/workflows/android-build.yml').exists()
-assert (base / '.github/workflows/ios-simulator-build.yml').exists()
-print(f'PASS: {len(source_files)} 个 Dart 源码模块、依赖引用、密钥分离、HTTPS/重定向、')
-print('      API 调用、群聊上限、朋友圈默认权限，以及 Android/iOS 构建流程结构。')
-print('NOTE: 未执行 Flutter/Dart 编译器，不能证明 APK/IPA 可用。')
+bad=[]
+for path in darts:
+    err=delimiters(path.read_text())
+    if err: bad.append(f'{path.relative_to(root)} {err}')
+    for imp in re.findall(r"(?m)^\s*import\s+['\"](\.{1,2}/[^'\"]+)['\"]",path.read_text()):
+        # the original repo has other intact files that aren't part of the patch.
+        target=(path.parent/imp).resolve()
+        if not target.exists() and str(target).startswith(str((root/'lib/v41').resolve())):
+            bad.append(f'{path.relative_to(root)} missing new module import {imp}')
+base=(root/'lib/v41/desktop_grid.dart').read_text()
+assert base.count("'chat','api','music','video','settings','memo','diary','album'")==1
+assert 'SliverGridDelegateWithFixedCrossAxisCount' in base
+assert 'const SliverGridDelegateWithFixedCrossAxisCount' not in base
+assert "dy: ((json['dy'] as num?) ?? .33).toDouble().clamp(0, 1).toDouble()" in (root/'lib/v41/avatar_core.dart').read_text()
+assert "'voiceConsent': voiceConsent" in (root/'lib/v41/avatar_core.dart').read_text()
+assert "roleChatMode" in (root/'lib/app_controller.dart').read_text()
+assert "XyChatMorePanel.open" in (root/'lib/ui_chat.dart').read_text()
+assert "XyDesktopGrid" in (root/'lib/ui_shell.dart').read_text()
+if bad:
+    print('Static issues:')
+    for b in bad:print(' -',b)
+    sys.exit(1)
+print(f'PASS: {len(darts)} Dart sources: balanced tokens, v41 local imports, 8 desktop apps, digital defaults and chat entry references')

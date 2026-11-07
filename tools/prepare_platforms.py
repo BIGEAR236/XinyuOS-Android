@@ -13,6 +13,10 @@ if manifest.exists():
     if 'android.permission.INTERNET' not in text:
         text = text.replace('<application',
                             '    <uses-permission android:name="android.permission.INTERNET" />\n    <application', 1)
+    # Microphone access for the V4.1 digital-person voice rounds (record plugin).
+    if 'android.permission.RECORD_AUDIO' not in text:
+        text = text.replace('<application',
+            '    <uses-permission android:name="android.permission.RECORD_AUDIO" />\n    <application', 1)
     text = re.sub(r'android:label="[^"]+"', 'android:label="心屿 OS"', text, count=1)
     # Local, inexact event notifications; no exact-alarm permission required.
     if 'android.permission.RECEIVE_BOOT_COMPLETED' not in text:
