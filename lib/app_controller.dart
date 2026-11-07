@@ -270,7 +270,7 @@ class AppController extends ChangeNotifier {
   /// threadFormats dictionary. Old daily conversation IDs are untouched.
   String roleChatMode(String id) {
     final saved = data.threadFormats['v41.mode.$id'];
-    return saved == 'story' || saved == 'daily' ? saved : data.chatMode;
+    return saved == 'story' || saved == 'daily' ? saved! : data.chatMode;
   }
   String activePrivateThread(String id) => roleChatMode(id) == 'story'
     ? '${privateThread(id)}:v41_story' : privateThread(id);
