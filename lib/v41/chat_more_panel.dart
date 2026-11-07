@@ -1,4 +1,7 @@
+import 'dart:io';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import '../app_controller.dart';
 
 /// Two compact, horizontally swipeable pages; never covers entire chat screen.
 class XyChatMorePanel extends StatefulWidget {
@@ -58,18 +61,37 @@ class XyRedEnvelopeDraft {
   final int amount;
   final String message;
   final String cover;
-  const XyRedEnvelopeDraft(this.amount,this.message,this.cover);
+  final String coverPath;
+  const XyRedEnvelopeDraft(this.amount,this.message,this.cover,{this.coverPath = ''});
 }
 class XyRedEnvelopeComposer extends StatefulWidget {
   final String recipient;
   final int balance;
-  const XyRedEnvelopeComposer({super.key,required this.recipient,required this.balance});
+  final AppController controller;
+  const XyRedEnvelopeComposer({super.key,required this.recipient,required this.balance,required this.controller});
   @override State<XyRedEnvelopeComposer> createState()=>_XyRedEnvelopeComposerState();
 }
 class _XyRedEnvelopeComposerState extends State<XyRedEnvelopeComposer> {
   final amount=TextEditingController(text:'20');
   final note=TextEditingController(text:'祝你每天都有小惊喜');
   String cover='樱花祝福';
+  String coverPath='';
+  bool uploading=false;
+  Future<void> _selectCover() async {
+    if(uploading)return;
+    setState(()=>uploading=true);
+    try {
+      final file=await FilePicker.pickFile(type:FileType.image);
+      if(file==null)return;
+      final size=await file.length();
+      if(size!=null&&size>5*1024*1024)throw const FormatException('红包封面最大 5MB');
+      final path=await widget.controller.local.copyIntoApp(file,'red_packet_covers');
+      final saved=widget.controller.local.resolve(path);
+      if(await saved.length()>5*1024*1024){await saved.delete();throw const FormatException('封面最大 5MB');}
+      if(mounted)setState((){coverPath=path;cover='我的自定义封面';});
+    }catch(e){if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text('$e')));}
+    finally{if(mounted)setState(()=>uploading=false);}
+  }
   @override void dispose(){amount.dispose();note.dispose();super.dispose();}
   @override Widget build(BuildContext context)=>Scaffold(
     backgroundColor:const Color(0xFFFFF4F0),
@@ -88,7 +110,14 @@ class _XyRedEnvelopeComposerState extends State<XyRedEnvelopeComposer> {
       Text('红包封面',style:Theme.of(context).textTheme.titleSmall),
       const SizedBox(height:8),
       Wrap(spacing:8,children:['樱花祝福','星空心愿','暖阳陪伴'].map((v)=>
-        ChoiceChip(selected:cover==v,label:Text(v),onSelected:(_)=>setState(()=>cover=v))).toList()),
+        ChoiceChip(selected:cover==v,label:Text(v),onSelected:(_)=>setState((){cover=v;coverPath='';}))).toList()),
+      const SizedBox(height:10),
+      OutlinedButton.icon(onPressed:uploading?null:_selectCover,
+        icon:const Icon(Icons.add_photo_alternate_outlined),label:Text(uploading?'正在保存…':'从相册上传红包封面')),
+      if(coverPath.isNotEmpty && widget.controller.local.resolve(coverPath).existsSync())
+        Center(child:ClipRRect(borderRadius:BorderRadius.circular(12),
+          child:Image.file(File(widget.controller.local.resolve(coverPath).path),
+            width:210,height:105,fit:BoxFit.cover))),
       const SizedBox(height:16),
       Text('当前虚拟余额：${widget.balance} 星币 · 不涉及真实资金',
         style:const TextStyle(fontSize:12,color:Colors.black54)),
@@ -100,7 +129,7 @@ class _XyRedEnvelopeComposerState extends State<XyRedEnvelopeComposer> {
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
             content:Text('请输入 1～500 星币且不超过余额的金额。')));return;
         }
-        Navigator.pop(context,XyRedEnvelopeDraft(count,note.text.trim(),cover));
+        Navigator.pop(context,XyRedEnvelopeDraft(count,note.text.trim(),cover,coverPath:coverPath));
       },child:const Text('塞钱进红包',style:TextStyle(fontSize:16,fontWeight:FontWeight.bold))),
     ]));
 }

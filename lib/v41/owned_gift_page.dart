@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../app_controller.dart';
 import '../v40/catalog.dart';
 import '../v40/marketplace_page.dart';
+import '../v42/product_illustration.dart';
 import 'gift_inventory.dart';
 
 class XyOwnedGiftPage extends StatefulWidget {
@@ -11,7 +12,6 @@ class XyOwnedGiftPage extends StatefulWidget {
   @override State<XyOwnedGiftPage> createState()=>_XyOwnedGiftPageState();
 }
 class _XyOwnedGiftPageState extends State<XyOwnedGiftPage> {
-  final photos=XyCommonsPhotos();
   Map<String,int> bag={};
   bool loading=true;
   bool sending=false;
@@ -21,22 +21,14 @@ class _XyOwnedGiftPageState extends State<XyOwnedGiftPage> {
     final next=await XyGiftInventory.load();
     if(mounted)setState(() {bag=next;loading=false;});
   }
-  @override void dispose(){photos.dispose();super.dispose();}
-  Widget _image(XyProduct product)=>FutureBuilder<List<XyCatalogPhoto>>(
-    future:photos.fetchFor(product),builder:(ctx,snapshot){
-      final list=snapshot.data??const <XyCatalogPhoto>[];
-      if(list.isEmpty)return const Icon(Icons.card_giftcard_rounded,color:Color(0xFFBC92AC),size:30);
-      return ClipRRect(borderRadius:BorderRadius.circular(10),child:Image.network(
-        list[product.photoSlot%list.length].url,fit:BoxFit.cover,width:56,height:56,
-        errorBuilder:(_,_,_)=>const Icon(Icons.card_giftcard_rounded)));
-    });
+  Widget _image(XyProduct product) => XyProductArt(product: product, height: 58);
   Future<void> _send(XyProduct product) async {
     if(sending)return;
     setState(()=>sending=true);
     try{
       if(widget.controller.character(widget.roleId)==null)throw StateError('好友不存在');
       if(!await XyGiftInventory.consume(product.id))throw StateError('该商品已送完或未购买');
-      if(!widget.controller.sendOwnedVirtualGift(widget.roleId,product.name)){
+      if(!widget.controller.sendOwnedVirtualGift(widget.roleId,product.name,sku:product.id)){
         await XyGiftInventory.add({product.id:1});
         throw StateError('无法投递礼物');
       }

@@ -270,7 +270,10 @@ class AppController extends ChangeNotifier {
   /// threadFormats dictionary. Old daily conversation IDs are untouched.
   String roleChatMode(String id) {
     final saved = data.threadFormats['v41.mode.$id'];
-    return saved == 'story' || saved == 'daily' ? saved! : data.chatMode;
+    if (saved == 'story') return 'story';
+    if (saved == 'daily') return 'daily';
+    // chatMode may be nullable in older saved data. Always return a String.
+    return data.chatMode == 'story' ? 'story' : 'daily';
   }
   String activePrivateThread(String id) => roleChatMode(id) == 'story'
     ? '${privateThread(id)}:v41_story' : privateThread(id);
@@ -761,11 +764,12 @@ $context
   }
 
   /// The product was paid for during checkout, so do not charge coins again.
-  bool sendOwnedVirtualGift(String characterId, String productName) {
+  bool sendOwnedVirtualGift(String characterId, String productName, {String sku = ''}) {
     final role=character(characterId);
     if(role==null||productName.trim().isEmpty)return false;
     _addMessage(activePrivateThread(characterId),'me',
-      '🎁 送给${role.name}的礼物：$productName（来自我的已购商品）');
+      sku.isEmpty ? '🎁 送给${role.name}的礼物：$productName'
+        : '🎁虚拟礼物卡:$sku|$productName');
     _worldEvent('gift','我将已购虚拟物品$productName赠给${role.name}',characterId:characterId);
     return true;
   }
@@ -847,12 +851,17 @@ $context
     return true;
   }
 
-  bool giveRedEnvelope(String characterId, int amount, {String note = '祝你开心'}) {
+  bool giveRedEnvelope(String characterId, int amount,
+      {String note = '祝你开心', String coverPath = ''}) {
     final c = character(characterId);
     if (c == null || amount < 1 || amount > 500 ||
         !_spend(amount, '给${c.name}发送虚拟红包', characterId:characterId)) return false;
-    _addMessage(activePrivateThread(characterId),'me','🧧 虚拟红包 $amount 星币：$note');
+    _addMessage(activePrivateThread(characterId),'me','🧧 虚拟红包 $amount 星币：$note',
+      imagePath: coverPath);
     _changeRoleWallet(characterId, amount, 'received:user_red_packet');
+    // This is a deterministic local acceptance/receipt, not a paid model response.
+    _addMessage(activePrivateThread(characterId),c.id,
+      '🧧 已收下你送的虚拟红包 · $amount 星币（本地收取）');
     _worldEvent('gift','我给${c.name}送了 $amount 星币虚拟红包',characterId:characterId);
     return true;
   }
@@ -1113,7 +1122,10 @@ $context
         if (!wantsStory && bubbleCount > 1)
           '日常聊天请用$bubbleCount段短句回复，每段最好在15～35字内，句子自然、不要编号。',
         if (!wantsStory)
-          '当你确实想主动赠送虚拟物品时，可以偶尔在答复末尾单独一行输出[虚拟礼物:玫瑰]或[虚拟红包:10]。虚拟红包限1～30星币，没有现实价值，不可请求付款；不必每次赠送。',
+          '你可以通过文字动作给玩家赠送虚拟红包。若用户要求你发红包，请自行决定是否赠送；'
+          '如果同意，必须在完整回复的最后单独一行放置[虚拟红包:10]这种精确标记（金额为1～30整数），'
+          '不可只口头说已经转账；礼物用[虚拟礼物:玫瑰]。玩家点击领取后才从你的本地模拟余额扣款。'
+          '若不愿意赠送可直接婉拒。不必每次都赠送。虚拟币不是真实货币。',
       ].where((s) => s.trim().isNotEmpty).join('\n');
       var answer = await MultiModelApi.call(client: client, profile: p,
         apiKey: key, persona: c.persona, roleName: c.name,
@@ -1197,9 +1209,10 @@ $context
   }
 
   void _addMessage(String thread, String sender, String text,
-      {String? quotedText, String? quotedSender, String? forwardedFrom}) {
+      {String? quotedText, String? quotedSender, String? forwardedFrom,
+        String imagePath = ''}) {
     data.messages.add(ChatEntry(id: newId(), threadId: thread, senderId: sender,
-      text: text, createdAt: DateTime.now(), quotedText: quotedText,
+      text: text, createdAt: DateTime.now(), imagePath: imagePath, quotedText: quotedText,
       quotedSender: quotedSender, forwardedFrom: forwardedFrom));
     _changed();
   }

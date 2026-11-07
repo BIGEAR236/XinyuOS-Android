@@ -23,6 +23,8 @@ import 'v41/digital_person_page.dart';
 import 'v41/chat_pet_companion.dart';
 import 'v41/avatar_core.dart';
 import 'v41/owned_gift_page.dart';
+import 'v42/product_illustration.dart';
+import 'v40/catalog.dart';
 import 'v40/marketplace_page.dart';
 
 /// Chat actions are local operations. There is no remote recall: a model may
@@ -268,10 +270,11 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _sendVirtualRedPacket(Character friend) async {
     final draft = await Navigator.push<XyRedEnvelopeDraft>(context,
       MaterialPageRoute(builder:(_)=>XyRedEnvelopeComposer(
-        recipient:friend.name,balance:widget.controller.data.worldBalance)));
+        recipient:friend.name,balance:widget.controller.data.worldBalance,
+        controller:widget.controller)));
     if(draft==null||!mounted)return;
     if(!widget.controller.giveRedEnvelope(friend.id,draft.amount,
-        note:'${draft.cover} · ${draft.message}')) {
+        note:'${draft.cover} · ${draft.message}',coverPath:draft.coverPath)) {
       uiError(context,'红包发送失败：金额无效或虚拟余额不足。');
     }
   }
@@ -304,28 +307,6 @@ class _ChatScreenState extends State<ChatScreen> {
         if (mounted && err != null) uiError(context, err);
       }
     } catch (e) { if (mounted) uiError(context, e); }
-  }
-
-  Future<void> _chooseReplyBubbleCount() async {
-    final id = widget.friend?.id;
-    if (id == null) return;
-    final current = await widget.controller.replyBubbleCount(id);
-    if (!mounted) return;
-    final chosen = await showModalBottomSheet<int>(context: context,
-      showDragHandle: true, builder: (ctx) => SafeArea(child: Column(
-      mainAxisSize: MainAxisSize.min, children: [
-        const ListTile(title: Text('日常聊天气泡数量'),
-          subtitle: Text('一次 API 请求产生多条本地消息，不会按条数重复请求。剧情场景不拆分。')),
-        for (final n in [1, 2, 3]) ListTile(
-          leading: Icon(current == n ? Icons.radio_button_checked : Icons.radio_button_unchecked),
-          title: Text(n == 1 ? '每次一条完整消息' : '每次约 $n 条短消息'),
-          onTap: () => Navigator.pop(ctx, n)),
-      ])));
-    if (chosen != null) {
-      await widget.controller.setReplyBubbleCount(id, chosen);
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('已设置：每次回复最多 $chosen 条气泡，仍只请求一次 API。')));
-    }
   }
 
   void _chooseModel() async {
@@ -442,8 +423,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 if (context.mounted) Navigator.push(context, MaterialPageRoute(
                   builder: (_) => CharacterDetailScreen(controller: widget.controller,
                     characterId: c.id)));
-              } else if (v == 'replies') {
-                await _chooseReplyBubbleCount();
+
               } else if (v == 'reset') {
                 if (await _confirm('清空当前会话',
                   '将删除这一段本地聊天记录，但角色设定仍会保留。此操作不可恢复。')) {
@@ -452,7 +432,6 @@ class _ChatScreenState extends State<ChatScreen> {
               }
             }, itemBuilder: (_) => const [
               PopupMenuItem(value: 'profile', child: Text('角色资料')),
-              PopupMenuItem(value: 'replies', child: Text('日常回复：1 / 2 / 3 条短消息')),
               PopupMenuItem(value: 'reset', child: Text('清空当前会话（重新开始）')),
             ], icon: const Icon(Icons.more_horiz)),
         ]),
@@ -558,6 +537,9 @@ class ChatBubble extends StatelessWidget {
         textAlign: TextAlign.center, style: Theme.of(context).textTheme.labelSmall));
     final mine = entry.senderId == 'me';
     final sentEnvelope = mine && entry.text.startsWith('🧧 虚拟红包 ');
+    final giftCard = mine && entry.text.startsWith('🎁虚拟礼物卡:');
+    final giftCode = giftCard ? entry.text.substring('🎁虚拟礼物卡:'.length).split('|').first : '';
+    final giftedProduct = xyProductById[giftCode];
     final gift = !mine && entry.senderId != 'system' && !entry.recalled && !streaming
       ? VirtualGiftOffer.parse(entry.text) : null;
     final character = controller.character(entry.senderId);
@@ -605,12 +587,23 @@ class ChatBubble extends StatelessWidget {
                       Text('${entry.quotedSender ?? '对方'}：${entry.quotedText}',
                         maxLines: 2, overflow: TextOverflow.ellipsis,
                         style: TextStyle(fontSize: 12, color: color.withValues(alpha: .7))),
-                    if (entry.imagePath.isNotEmpty &&
+                    if (!sentEnvelope && entry.imagePath.isNotEmpty &&
                         controller.local.resolve(entry.imagePath).existsSync())
                       ClipRRect(borderRadius: BorderRadius.circular(8),
                         child: Image.file(controller.local.resolve(entry.imagePath),
                           width: 210, fit: BoxFit.cover)),
-                    if (sentEnvelope) Container(
+                    if (giftCard && giftedProduct != null) Container(
+                      width:218,padding:const EdgeInsets.all(9),
+                      decoration:BoxDecoration(color:const Color(0xFFFFEDF4),
+                        borderRadius:BorderRadius.circular(14)),
+                      child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+                        XyProductArt(product:giftedProduct,height:105),
+                        const SizedBox(height:7),
+                        Text(giftedProduct.name,style:const TextStyle(
+                          fontSize:15,fontWeight:FontWeight.w700)),
+                        const Text('礼物已送达 ♡',style:TextStyle(fontSize:11)),
+                      ]))
+                    else if (sentEnvelope) Container(
                       width:220,padding:const EdgeInsets.all(14),
                       decoration:BoxDecoration(gradient:const LinearGradient(
                         colors:[Color(0xFFE58059),Color(0xFFC95E4A)]),
@@ -619,31 +612,53 @@ class ChatBubble extends StatelessWidget {
                         const Row(children:[Icon(Icons.redeem,color:Colors.white,size:30),
                           SizedBox(width:8),Text('虚拟红包',style:TextStyle(
                             color:Colors.white,fontSize:17,fontWeight:FontWeight.bold))]),
+                        if (entry.imagePath.isNotEmpty &&
+                            controller.local.resolve(entry.imagePath).existsSync()) ...[
+                          const SizedBox(height:8),
+                          ClipRRect(borderRadius:BorderRadius.circular(9),
+                            child:Image.file(controller.local.resolve(entry.imagePath),
+                              width:190,height:90,fit:BoxFit.cover)),
+                        ],
                         const SizedBox(height:9),
                         Text(entry.text.replaceFirst('🧧 虚拟红包 ',''),
                           style:const TextStyle(color:Colors.white)),
                         const SizedBox(height:5),
-                        const Text('已发送并入账 · 仅为虚拟金币',
+                        const Text('对方已收下 · 仅为虚拟金币',
                           style:TextStyle(color:Colors.white70,fontSize:11)),
                       ]))
-                    else if (entry.text != '[图片]')
-                      ChatFormattedText(text: entry.text, color: color,
+                    else if (!giftCard && entry.text != '[图片]')
+                      ChatFormattedText(text: gift == null ?
+                        entry.text.replaceAll('（来自我的已购商品）','') :
+                        entry.text.replaceFirst(RegExp(
+                          r'(?:^|\n)\s*\[虚拟(?:红包|礼物)[:：][^\]\n]+\]\s*$'),''), color: color,
                         roleName: controller.displayName(entry.senderId),
                         immersive: !mine && character!=null && controller.roleChatMode(character.id)=='story'),
                     if (gift != null) Padding(
                       padding: const EdgeInsets.only(top: 8),
-                      child: FilledButton.tonalIcon(
-                        onPressed: controller.hasClaimedAiGift(entry.id) ? null : () {
+                      child: InkWell(
+                        borderRadius:BorderRadius.circular(12),
+                        onTap: controller.hasClaimedAiGift(entry.id) ? null : () {
                           final result = controller.claimAiGift(entry);
                           ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                             content: Text(result ?? (gift.isRedPacket
                               ? '已领取${gift.coins}虚拟星币' : '已收下${gift.name}'))));
                         },
-                        icon: Icon(gift.isRedPacket ? Icons.redeem : Icons.card_giftcard),
-                        label: Text(controller.hasClaimedAiGift(entry.id)
-                          ? '已经领取' : gift.isRedPacket
-                            ? '领取虚拟红包 · ${gift.coins}⭐' : '收下礼物 · ${gift.name}'),
-                      )),
+                        child:Container(width:228,padding:const EdgeInsets.all(13),
+                          decoration:BoxDecoration(gradient:LinearGradient(colors: gift.isRedPacket
+                            ? const [Color(0xFFE9956A),Color(0xFFC65B52)]
+                            : const [Color(0xFFE9C2D6),Color(0xFFBD95C2)]),
+                            borderRadius:BorderRadius.circular(12)),
+                          child:Row(children:[Icon(gift.isRedPacket
+                            ? Icons.redeem_rounded:Icons.card_giftcard_rounded,
+                              color:Colors.white,size:29),
+                            const SizedBox(width:10),
+                            Expanded(child:Text(controller.hasClaimedAiGift(entry.id)
+                              ? '已领取' : gift.isRedPacket
+                                ? '领取红包 · ${gift.coins}⭐' : '收下${gift.name}',
+                              style:const TextStyle(color:Colors.white,
+                                fontWeight:FontWeight.bold))),
+                          ]))),
+                      ),
                     if (entry.editedAt != null)
                       Text('已编辑', style: TextStyle(fontSize: 10,
                         color: color.withValues(alpha: .65))),

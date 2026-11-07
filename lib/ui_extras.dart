@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app_controller.dart';
 import 'models.dart';
@@ -10,6 +11,7 @@ import 'ui_shell.dart';
 import 'v41/settings_home.dart';
 import 'v39/desktop_icon_settings.dart';
 import 'v39/font_import_policy.dart';
+import 'v42/moment_photo_store.dart';
 
 class MomentsTab extends StatefulWidget {
   final AppController controller;
@@ -23,17 +25,55 @@ class _MomentsTabState extends State<MomentsTab> {
 
   Future<void> _composeMine() async {
     final input = TextEditingController();
+    String photo = '';
     try {
       final value = await showDialog<String>(context: context,
-        builder: (ctx) => AlertDialog(title: const Text('发表我的朋友圈'),
-          content: TextField(controller: input, autofocus: true, maxLines: 6,
-            maxLength: 1500, decoration: const InputDecoration(hintText: '分享此刻的心情…')),
-          actions: [TextButton(onPressed: () => Navigator.pop(ctx),
-            child: const Text('取消')),
-            FilledButton(onPressed: () => Navigator.pop(ctx, input.text.trim()),
-              child: const Text('发表'))]));
-      if (value != null && value.isNotEmpty) controller.addMyMoment(value);
+        builder: (dialog) => StatefulBuilder(builder: (dialog, refresh) => AlertDialog(
+          title: const Text('发表我的朋友圈'),
+          content: SingleChildScrollView(child: Column(mainAxisSize:MainAxisSize.min,children:[
+            TextField(controller: input, autofocus: true, maxLines: 5,
+              maxLength: 1500, decoration: const InputDecoration(hintText: '分享此刻的心情…')),
+            const SizedBox(height:8),
+            OutlinedButton.icon(onPressed: () async {
+              try {
+                final path=await _pickMomentPhoto();
+                if(path!=null)refresh(()=>photo=path);
+              }catch(e){if(mounted)uiError(context,e);}
+            },icon:const Icon(Icons.add_photo_alternate_outlined),label:const Text('添加本地图片')),
+            if(photo.isNotEmpty && controller.local.resolve(photo).existsSync())
+              Image.file(controller.local.resolve(photo),height:125,fit:BoxFit.cover),
+          ])),
+          actions: [TextButton(onPressed: () => Navigator.pop(dialog),child: const Text('取消')),
+            FilledButton(onPressed: () => Navigator.pop(dialog, input.text.trim()),
+              child: const Text('发表'))])));
+      if (value != null && (value.isNotEmpty || photo.isNotEmpty)) {
+        controller.addMyMoment(value.isEmpty ? '分享一张图片 ♡' : value);
+        if (photo.isNotEmpty && controller.data.moments.isNotEmpty) {
+          await XyMomentPhotoStore.set(controller.data.moments.first.id,photo);
+          if(mounted)setState((){});
+        }
+      }
     } finally { input.dispose(); }
+  }
+
+  Future<String?> _pickMomentPhoto() async {
+    final picked=await FilePicker.pickFile(type:FileType.image);
+    if(picked==null)return null;
+    final bytes=await picked.length();
+    if(bytes!=null && bytes>8*1024*1024)throw const FormatException('朋友圈图片最大 8MB');
+    final relative=await controller.local.copyIntoApp(picked,'moment_photos');
+    final saved=controller.local.resolve(relative);
+    if(await saved.length()>8*1024*1024){await saved.delete();throw const FormatException('图片最大 8MB');}
+    return relative;
+  }
+
+  Future<void> _attachMomentPhoto(MomentEntry moment) async {
+    try {
+      final photo=await _pickMomentPhoto();
+      if(photo==null)return;
+      await XyMomentPhotoStore.set(moment.id,photo);
+      if(mounted)setState((){});
+    }catch(e){if(mounted)uiError(context,e);}
   }
 
   Future<void> _showOptions() async {
@@ -74,7 +114,7 @@ class _MomentsTabState extends State<MomentsTab> {
     await showModalBottomSheet<void>(context: context, showDragHandle: true,
       builder: (sheetContext) => StatefulBuilder(builder: (sheetContext, refresh) =>
         SafeArea(child: Padding(padding: const EdgeInsets.all(18),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
+          child: ListView(shrinkWrap: true, children: [
             const Text('朋友圈互动设置',
               style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
             SwitchListTile(title: const Text('允许 AI 定期发布朋友圈（前台）'),
@@ -102,6 +142,20 @@ class _MomentsTabState extends State<MomentsTab> {
                 controller.setAutoMomentInteractions(value);
                 refresh(() {});
               }),
+            const Divider(),
+            const ListTile(title: Text('各 AI 自主发帖权限'),
+              subtitle: Text('每个角色均默认关闭，须同时开启总开关和该角色许可；额外调用模型可能收费。')),
+            ...controller.data.characters.map((role) => FutureBuilder<bool?>(
+              future: SharedPreferencesAsync().getBool('v41.roleMoment.${role.id}.enabled'),
+              builder: (context, snapshot) => SwitchListTile(
+                title: Text(role.name),
+                subtitle: Text(role.allowMoments ? '允许按间隔自主发帖' : '尚未授权角色发朋友圈'),
+                value: snapshot.data == true,
+                onChanged: (enabled) async {
+                  await SharedPreferencesAsync().setBool('v41.roleMoment.${role.id}.enabled',enabled);
+                  if(enabled && !role.allowMoments)controller.allowMoments(role.id,true);
+                  refresh(() {});
+                }))),
             SwitchListTile(title: const Text('我评论后让 AI 自动回复'),
               subtitle: const Text('默认关闭。打开后最多调用两位已授权 AI，可能产生 API 费用。'),
               value: controller.data.autoMomentReplies,
@@ -204,16 +258,25 @@ class _MomentsTabState extends State<MomentsTab> {
         ]),
         const SizedBox(height: 11),
         SelectableText(m.text),
+        FutureBuilder<String>(future:XyMomentPhotoStore.get(m.id),builder:(ctx,snapshot){
+          final path=snapshot.data??'';
+          final file=path.isEmpty?null:controller.local.resolve(path);
+          if(file==null||!file.existsSync())return const SizedBox.shrink();
+          return Padding(padding:const EdgeInsets.only(top:9),child:ClipRRect(
+            borderRadius:BorderRadius.circular(12),
+            child:Image.file(file,height:240,width:double.infinity,fit:BoxFit.cover)));
+        }),
         const SizedBox(height: 8),
-        Row(children: [
+        Wrap(spacing: 3, alignment: WrapAlignment.start, children: [
           TextButton.icon(onPressed: () => controller.toggleMyMomentLike(m.id),
             icon: Icon(m.likedBy.contains('me') ? Icons.favorite : Icons.favorite_border,
               size: 18, color: m.likedBy.contains('me') ? Colors.redAccent : null),
             label: Text('点赞 ${m.likedBy.length}')),
+          IconButton(tooltip:'添加动态图片',onPressed:()=>_attachMomentPhoto(m),
+            icon:const Icon(Icons.add_photo_alternate_outlined)),
           TextButton.icon(onPressed: () => _comment(m),
             icon: const Icon(Icons.mode_comment_outlined, size: 18),
             label: Text('评论 ${m.comments.length}')),
-          const Spacer(),
           TextButton.icon(onPressed: busy ? null : () => _invite(m),
             icon: busy ? const SizedBox(width: 15, height: 15,
               child: CircularProgressIndicator(strokeWidth: 2)) :

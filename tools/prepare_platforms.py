@@ -17,7 +17,21 @@ if manifest.exists():
     if 'android.permission.RECORD_AUDIO' not in text:
         text = text.replace('<application',
             '    <uses-permission android:name="android.permission.RECORD_AUDIO" />\n    <application', 1)
-    text = re.sub(r'android:label="[^"]+"', 'android:label="心屿 OS"', text, count=1)
+    # V4.2 小雨机: launcher display name only; applicationId / signing stay untouched.
+    text = re.sub(r'android:label="[^"]+"', 'android:label="小雨机"', text, count=1)
+    # V4.2 speech_to_text + flutter_tts need package visibility for on-device
+    # speech recognition and TTS services (Android 11+). Keep exactly one <queries>.
+    if 'android.speech.RecognitionService' not in text:
+        text = text.replace('<application',
+            '    <queries>\n'
+            '        <intent>\n'
+            '            <action android:name="android.speech.RecognitionService" />\n'
+            '        </intent>\n'
+            '        <intent>\n'
+            '            <action android:name="android.intent.action.TTS_SERVICE" />\n'
+            '        </intent>\n'
+            '    </queries>\n'
+            '    <application', 1)
     # Local, inexact event notifications; no exact-alarm permission required.
     if 'android.permission.RECEIVE_BOOT_COMPLETED' not in text:
         text = text.replace('<application',
@@ -67,7 +81,7 @@ if manifest.exists():
                 if 'coreLibraryDesugaring ' not in source:
                     source += "\ndependencies {\n    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.4'\n}\n"
             gradle.write_text(source, encoding='utf-8')
-    print('✓ Android 已设置 HTTPS 网络权限、禁用明文通信和系统自动备份。')
+    print('✓ Android 已设置 HTTPS 网络权限、麦克风权限、语音服务可见性（queries）和应用显示名。')
 else:
     print('! Android 工程不存在：请先运行 flutter create --platforms=android,ios .')
 
@@ -87,14 +101,15 @@ if project.exists():
                   'IPHONEOS_DEPLOYMENT_TARGET = 14.0;', text)
     project.write_text(text, encoding='utf-8')
 
+# Keep the iOS display name consistent with the V4.2 小雨机 rebrand.
 plist = root / 'ios/Runner/Info.plist'
 if plist.exists():
     text = plist.read_text('utf-8')
     text = re.sub(r'(<key>CFBundleDisplayName</key>\s*<string>)[^<]*(</string>)',
-                  r'\g<1>心屿 OS\g<2>', text)
+                  r'\g<1>小雨机\g<2>', text)
     if '<key>CFBundleDisplayName</key>' not in text:
         text = text.replace('</dict>',
-                            '  <key>CFBundleDisplayName</key>\n  <string>心屿 OS</string>\n</dict>', 1)
+                            '  <key>CFBundleDisplayName</key>\n  <string>小雨机</string>\n</dict>', 1)
     plist.write_text(text, encoding='utf-8')
     print('✓ iOS 已设置 14.0 最低版本和应用名称；设备安装仍需 Xcode 签名。')
 else:

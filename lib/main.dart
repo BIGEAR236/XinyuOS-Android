@@ -48,7 +48,7 @@ class XinyuApp extends StatelessWidget {
       final themeColor = Color(controller.data.themeColor);
       return MaterialApp(
         debugShowCheckedModeBanner: false,
-        title: '心屿 OS',
+        title: '小雨机',
         themeMode: dark ? ThemeMode.dark : ThemeMode.light,
         theme: ThemeData(useMaterial3: true,
           colorScheme: ColorScheme.fromSeed(seedColor: themeColor),

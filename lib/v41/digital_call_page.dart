@@ -1,163 +1,140 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
-import 'package:just_audio/just_audio.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:record/record.dart';
-
+import 'package:flutter_tts/flutter_tts.dart';
+import 'package:speech_to_text/speech_to_text.dart' as speech;
 import '../app_controller.dart';
-import '../models.dart';
+import '../v42/animated_portrait.dart';
 import 'avatar_core.dart';
 
-/// Sequential voice turn MVP: mic -> chosen STT -> ORIGINAL role chat model ->
-/// chosen TTS -> playback. Not a video stream, real-time RTC, or lip-synced 3D.
+/// Turn-based phone speech recognition -> original role LLM -> phone TTS.
+/// Phone speech engines may use a network. This is NOT a continuous video call.
 class DigitalCallPage extends StatefulWidget {
   final AppController controller;
   final String roleId;
   const DigitalCallPage({super.key, required this.controller, required this.roleId});
   @override State<DigitalCallPage> createState() => _DigitalCallPageState();
 }
-
 class _DigitalCallPageState extends State<DigitalCallPage> {
-  final recorder = AudioRecorder();
-  final player = AudioPlayer();
-  final message = TextEditingController();
+  final speech.SpeechToText recognizer = speech.SpeechToText();
+  final FlutterTts speaker = FlutterTts();
+  final TextEditingController input = TextEditingController();
   DigitalPersonConfig? profile;
-  bool recording = false;
-  bool busy = false;
-  bool speaking = false;
-  String lastTranscript = '';
-  String lastReply = '';
-  String stateText = '语音对话就绪';
-
-  @override void initState() { super.initState(); _load();
-    player.playerStateStream.listen((state) {
-      if (mounted) setState(() => speaking = state.playing);
-    });
+  bool available = false;
+  bool listening = false;
+  bool sending = false;
+  bool talking = false;
+  String status = '正在准备语音功能';
+  String reply = '';
+  @override void initState() {
+    super.initState();
+    _init();
+    speaker.setStartHandler(() { if (mounted) setState(() => talking = true); });
+    speaker.setCompletionHandler(() { if (mounted) setState(() => talking = false); });
+    speaker.setErrorHandler((_) { if (mounted) setState(() => talking = false); });
   }
-  Future<void> _load() async {
-    final loaded = await DigitalPersonStore.load(widget.roleId);
-    if (mounted) setState(() => profile = loaded);
+  Future<void> _init() async {
+    final p = await DigitalPersonStore.load(widget.roleId);
+    try {
+      available = await recognizer.initialize();
+      await speaker.setLanguage('zh-CN');
+      await speaker.setSpeechRate(.49);
+      status = available ? '点击麦克风，说完后发送' : '系统语音识别不可用；仍可文字交流';
+    } catch (e) { status = '系统语音服务不可用：$e'; }
+    if (mounted) setState(() => profile = p);
   }
-  void _show(Object text) { if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$text'))); }
-
-  Future<void> _recordToggle() async {
-    if (busy || profile?.enabled != true) return;
-    if (recording) {
-      setState(() { recording = false; busy = true; stateText = '正在识别你的声音…'; });
-      try {
-        final path = await recorder.stop();
-        if (path == null) throw StateError('没有生成录音文件。');
-        final p = profile!;
-        final text = await DigitalPersonApi.transcribe(endpoint: p.sttEndpoint,
-          model: p.sttModel, key: await DigitalPersonStore.getKey(widget.roleId,'stt'),
-          audio: File(path));
-        if (text.isEmpty) throw StateError('录音未识别出文字。');
-        if (mounted) setState(() { lastTranscript = text; stateText = '正在向角色原绑定模型发送消息…'; });
-        await _sendToOriginalModel(text);
-      } catch (e) { _show(e); }
-      finally { if (mounted) setState(() => busy = false); }
-    } else {
-      try {
-        if (!await recorder.hasPermission()) throw StateError('未获得麦克风权限，请前往系统设置开启。');
-        final temp = await getTemporaryDirectory();
-        await recorder.start(const RecordConfig(encoder: AudioEncoder.aacLc),
-          path: '${temp.path}/xinyu_voice_${DateTime.now().millisecondsSinceEpoch}.m4a');
-        if (mounted) setState(() { recording = true; stateText = '正在录音，点击结束并发送'; });
-      } catch (e) { _show(e); }
-    }
+  void _toast(Object e) {
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
   }
-
-  Future<void> _sendToOriginalModel(String text) async {
+  Future<void> _mic() async {
+    if (sending || !available || profile?.enabled != true) return;
+    try {
+      if (listening) {
+        await recognizer.stop();
+        if (mounted) setState(() { listening = false; status = '识别完成，可检查文字后发送'; });
+      } else {
+        await speaker.stop();
+        await recognizer.listen(onResult: (result) {
+          if (!mounted) return;
+          setState(() { input.text = result.recognizedWords; });
+        }, localeId: 'zh_CN');
+        if (mounted) setState(() { listening = true; status = '正在听你说话…'; });
+      }
+    } catch (e) { _toast(e); if (mounted) setState(() => listening = false); }
+  }
+  Future<void> _send() async {
+    final text = input.text.trim();
+    if (text.isEmpty || sending || profile?.enabled != true) return;
     final role = widget.controller.character(widget.roleId);
-    if (role == null) throw StateError('角色不存在');
-    final thread = widget.controller.activePrivateThread(widget.roleId);
-    final old = widget.controller.threadMessages(thread).where((m) => m.senderId == role.id).length;
-    final error = await widget.controller.sendPrivate(role, text);
-    if (error != null) throw StateError(error);
-    final newReplies = widget.controller.threadMessages(thread)
-      .where((m) => m.senderId == role.id).toList();
-    if (newReplies.length <= old) return;
-    final answer = newReplies.skip(old).map((m) => m.text).join(' ');
-    if (mounted) setState(() {lastReply = answer; stateText = '正在合成角色声音…';});
-    final p = profile!;
-    if (p.ttsEndpoint.isEmpty || p.voiceId.isEmpty) {
-      if (mounted) setState(() => stateText = '已收到文字回复；尚未配置 TTS。');
-      return;
-    }
-    final bytes = await DigitalPersonApi.synthesize(endpoint:p.ttsEndpoint,
-      model:p.ttsModel, voice:p.voiceId,
-      key: await DigitalPersonStore.getKey(widget.roleId,'tts'), text:answer);
-    final root = await getTemporaryDirectory();
-    final out = File('${root.path}/xinyu_tts_${DateTime.now().microsecondsSinceEpoch}.mp3');
-    await out.writeAsBytes(bytes, flush:true);
-    await player.setFilePath(out.path);
-    await player.play();
-    if (mounted) setState(() => stateText = '语音播报结束');
+    if (role == null) return;
+    if (listening) await recognizer.stop();
+    await speaker.stop();
+    setState(() { sending = true; listening = false; status = '正在联系原聊天模型…'; });
+    try {
+      final thread = widget.controller.activePrivateThread(widget.roleId);
+      final oldCount = widget.controller.threadMessages(thread)
+        .where((m) => m.senderId == role.id).length;
+      final error = await widget.controller.sendPrivate(role, text);
+      if (error != null) throw StateError(error);
+      final messages = widget.controller.threadMessages(thread)
+        .where((m) => m.senderId == role.id).skip(oldCount).toList();
+      final answer = messages.map((m) => m.text).join('\n').trim();
+      if (!mounted) return;
+      setState(() { reply = answer; input.clear(); status = '已收到回复'; });
+      if (answer.isNotEmpty) {
+        await speaker.speak(answer.length > 900 ? answer.substring(0, 900) : answer);
+      }
+    } catch (e) { _toast(e); if (mounted) setState(() => status = '发送失败，请检查原模型配置'); }
+    finally { if (mounted) setState(() => sending = false); }
   }
-
   @override void dispose() {
-    if (recording) { recorder.stop(); }
-    recorder.dispose(); player.dispose(); message.dispose(); super.dispose();
+    recognizer.cancel();
+    speaker.stop();
+    input.dispose();
+    super.dispose();
   }
   @override Widget build(BuildContext context) {
     final c = profile;
-    final role = widget.controller.character(widget.roleId);
+    final name = widget.controller.character(widget.roleId)?.name ?? 'AI';
     if (c == null) return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    return Scaffold(appBar: AppBar(title: Text('${role?.name ?? 'AI 角色'} · 数字人语音对话')),
+    return Scaffold(appBar: AppBar(title: Text('和$name语音聊天')),
       body: LayoutBuilder(builder: (context, bounds) => Stack(children: [
         Container(decoration: const BoxDecoration(gradient: LinearGradient(
-          begin: Alignment.topCenter, end: Alignment.bottomCenter,
-          colors: [Color(0xFFFFF6FC),Color(0xFFE8EAF9)]))),
-        Positioned(left: bounds.maxWidth * c.dx - 95 * c.scale,
-          top: (bounds.maxHeight * c.dy - 115 * c.scale).clamp(10, bounds.maxHeight * .6).toDouble(),
-          child: GestureDetector(
-            onPanUpdate: (details) {
-              setState(() {
-                c.dx = (c.dx + details.delta.dx / bounds.maxWidth).clamp(0,1).toDouble();
-                c.dy = (c.dy + details.delta.dy / bounds.maxHeight).clamp(0,1).toDouble();
-              });
-            }, onPanEnd: (_) => DigitalPersonStore.save(c),
-            child: AnimatedScale(scale: speaking ? c.scale * 1.035 : c.scale,
-              duration: const Duration(milliseconds: 260),
-              child: Container(width: 190, height: 230,
-                decoration: BoxDecoration(color:Colors.white,
-                  borderRadius: BorderRadius.circular(30),
-                  boxShadow: const [BoxShadow(color: Color(0x1F715B9A),blurRadius:22)]),
-                clipBehavior: Clip.antiAlias,
-                child: c.portraitPath.isNotEmpty && File(c.portraitPath).existsSync()
-                  ? Image.file(File(c.portraitPath),fit:BoxFit.cover)
-                  : const Icon(Icons.face_3_outlined,size:90,color:Color(0xFFB89BBF)))))),
-        Positioned(left:16,right:16,bottom:0,child:SafeArea(child: Card(
-          color: Colors.white.withValues(alpha:.94), child:Padding(
-          padding:const EdgeInsets.all(14),child:Column(mainAxisSize:MainAxisSize.min,children:[
-            Text(stateText,style:Theme.of(context).textTheme.titleSmall),
-            const SizedBox(height:8),
-            if (!c.enabled) const Text('此角色的数字人默认关闭，请先到数字人图库启用。'),
-            if (lastTranscript.isNotEmpty) Align(alignment:Alignment.centerLeft,
-              child:Text('我：$lastTranscript',maxLines:3)),
-            if (lastReply.isNotEmpty) Align(alignment:Alignment.centerLeft,
-              child:Text('${role?.name ?? 'AI'}：$lastReply',maxLines:5)),
-            Slider(value:c.scale.clamp(.5,1.8).toDouble(),min:.5,max:1.8,
-              onChanged:(v) => setState(() => c.scale = v),
-              onChangeEnd:(_) => DigitalPersonStore.save(c)),
-            Row(children:[Expanded(child:TextField(controller:message,
-              decoration:const InputDecoration(hintText:'也可以先输入文字…'))),
-              IconButton(icon:const Icon(Icons.send_rounded),
-                onPressed:busy || !c.enabled ? null : () async {
-                  final input=message.text.trim();if(input.isEmpty)return;
-                  setState((){busy=true;stateText='正在生成回复…';lastTranscript=input;});
-                  try{await _sendToOriginalModel(input);message.clear();}
-                  catch(e){_show(e);}finally{if(mounted)setState(()=>busy=false);}
-                })]),
-            const SizedBox(height:8),
-            FilledButton.icon(onPressed:busy || !c.enabled ? null : _recordToggle,
-              icon:Icon(recording?Icons.stop_circle_outlined:Icons.mic_rounded),
-              label:Text(recording?'结束录音并发送':'按下开始录音（按轮对话）')),
-            const SizedBox(height:4),
-            const Text('当前为图片数字人＋轮次语音互动，不是实时视频流或自动口型同步。',
-              style:TextStyle(fontSize:11,color:Colors.black54)),
-          ]))))),
+          colors: [Color(0xFFFFF4FA), Color(0xFFEDEAF9)],
+          begin: Alignment.topCenter, end: Alignment.bottomCenter))),
+        Positioned(left: (bounds.maxWidth * c.dx - 95 * c.scale)
+            .clamp(0, bounds.maxWidth - 95).toDouble(),
+          top: (bounds.maxHeight * c.dy - 115 * c.scale)
+            .clamp(0, bounds.maxHeight * .55).toDouble(),
+          child: GestureDetector(onPanUpdate: (details) {
+            setState(() {
+              c.dx = (c.dx + details.delta.dx / bounds.maxWidth).clamp(0, 1).toDouble();
+              c.dy = (c.dy + details.delta.dy / bounds.maxHeight).clamp(0, 1).toDouble();
+            });
+          }, onPanEnd: (_) => DigitalPersonStore.save(c),
+          child: Transform.scale(scale: c.scale,
+            child: XyAnimatedPortrait(path: c.portraitPath, talking: talking)))),
+        Positioned(left: 12, right: 12, bottom: 0, child: SafeArea(child:
+          Card(color: Colors.white.withValues(alpha: .95), child: Padding(
+            padding: const EdgeInsets.all(12), child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Text(status, style: Theme.of(context).textTheme.titleSmall),
+              if (reply.isNotEmpty) Padding(padding: const EdgeInsets.all(8),
+                child: Text('$name：$reply', maxLines: 4, overflow: TextOverflow.ellipsis)),
+              Slider(min: .5, max: 1.8, value: c.scale.clamp(.5, 1.8).toDouble(),
+                onChanged: (v) => setState(() => c.scale = v),
+                onChangeEnd: (_) => DigitalPersonStore.save(c)),
+              Row(children: [
+                IconButton(onPressed: sending ? null : _mic,
+                  icon: Icon(listening ? Icons.stop_circle : Icons.mic_none_rounded),
+                  tooltip: listening ? '结束识别' : '开始说话'),
+                Expanded(child: TextField(controller: input, maxLines: 2,
+                  decoration: const InputDecoration(hintText: '语音识别文字，可编辑…'))),
+                IconButton(onPressed: sending ? null : _send,
+                  icon: const Icon(Icons.send_rounded)),
+              ]),
+              TextButton.icon(onPressed: () => speaker.stop(),
+                icon: const Icon(Icons.volume_off_outlined), label: const Text('停止朗读')),
+              const Text('按轮对话 · 不是实时视频或口型同步。系统语音识别可能联网。',
+                style: TextStyle(fontSize: 10)),
+            ]))))),
       ])));
   }
 }

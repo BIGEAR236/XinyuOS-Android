@@ -81,10 +81,10 @@ class _PhoneHomeScreenState extends State<PhoneHomeScreen>
   }
   void _checkSocial() {
     if(controller.data.autoMomentPosting) {
-      unawaited(controller.maybeAutoPostMoment().catchError((Object _) {}));
+      unawaited(controller.maybeAutoPostMoment().catchError((Object _) => null));
     }
     if(controller.data.autoMomentInteractions) {
-      unawaited(controller.maybeAutoSocialSweep().catchError((Object _) {}));
+      unawaited(controller.maybeAutoSocialSweep().catchError((Object _) => null));
     }
   }
   @override void didChangeAppLifecycleState(AppLifecycleState state) {
@@ -120,7 +120,7 @@ class _PhoneHomeScreenState extends State<PhoneHomeScreen>
     late final Widget destination;
     switch (key) {
       case 'chat':
-        icon=Icons.chat_bubble_rounded; title='心屿通讯';
+        icon=Icons.chat_bubble_rounded; title='雨雨机';
         color=const Color(0xFF90BDAE); destination=SocialScreen(controller:controller); break;
       case 'api':
         icon=Icons.hub_rounded; title='API 连接';
@@ -173,7 +173,7 @@ class _PhoneHomeScreenState extends State<PhoneHomeScreen>
           Text('${current.year} / ${current.month} / ${current.day}',
             style: const TextStyle(color: Colors.white, fontSize: 16)),
           const SizedBox(height: 10),
-          const Text('心屿 · 让故事继续',
+          const Text('小雨机，把每句话送到对的AI',
             style: TextStyle(color: Colors.white70, letterSpacing: 2)),
           const SizedBox(height: 16),
           Expanded(child: SingleChildScrollView(
@@ -425,7 +425,7 @@ class MyTab extends StatelessWidget {
       onTap:()=>Navigator.push(context,MaterialPageRoute(builder:(_)=>
         XyMarketplacePage(controller:controller)))),
     const ListTile(leading: CircleAvatar(child: Icon(Icons.auto_awesome)),
-      title: Text('心屿 OS'), subtitle: Text('V4.0 · 聊天内虚拟生活 · 本地优先')),
+      title: Text('小雨机'), subtitle: Text('V4.0 · 聊天内虚拟生活 · 本地优先')),
     const Divider(),
     ListTile(leading: const Icon(Icons.tune_outlined), title: const Text('通讯设置'),
       subtitle: const Text('聊天、界面与显示、朋友权限、存储空间、主动关怀'),

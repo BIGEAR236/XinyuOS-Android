@@ -7,6 +7,7 @@ import '../app_controller.dart';
 import '../intimacy/app_role_responder.dart';
 import 'catalog.dart';
 import '../v41/gift_inventory.dart';
+import '../v42/product_illustration.dart';
 
 /// This marketplace is entirely fictional: coins have no cash value,
 /// there is no real checkout, shipping, bank transfer or affiliate storefront.
@@ -20,7 +21,6 @@ class XyMarketplacePage extends StatefulWidget {
 
 class _XyMarketplacePageState extends State<XyMarketplacePage> {
   final _preferences = SharedPreferencesAsync();
-  final _photos = XyCommonsPhotos();
   final _search = TextEditingController();
   final _cart = <String, int>{};
   String _category = 'shoes';
@@ -76,31 +76,10 @@ class _XyMarketplacePageState extends State<XyMarketplacePage> {
   int get _quantity => _cart.values.fold(0, (sum, value) => sum + value);
 
   @override
-  void dispose() { _search.dispose(); _photos.dispose(); super.dispose(); }
+  void dispose() { _search.dispose(); super.dispose(); }
 
   Widget _photo(XyProduct product, {double? height}) =>
-    FutureBuilder<List<XyCatalogPhoto>>(
-      future: _photos.fetchFor(product),
-      builder: (context, snapshot) {
-        final images = snapshot.data ?? const <XyCatalogPhoto>[];
-        final item = images.isEmpty ? null : images[product.photoSlot % images.length];
-        if (item == null) {
-          return Container(height: height, color: const Color(0xFFF2EBF4),
-            alignment: Alignment.center, child: Column(
-              mainAxisSize: MainAxisSize.min, children: [
-                Icon(_categoryIcon(product.category), color: const Color(0xFFAE8CB1), size: 34),
-                const SizedBox(height: 4),
-                const Text('图片加载中或暂不可用', style: TextStyle(fontSize: 9)),
-              ]));
-        }
-        return Image.network(item.url, height: height, fit: BoxFit.cover,
-          errorBuilder: (_, _, _) => Container(height: height,
-            color: const Color(0xFFF2EBF4),
-            child: Icon(_categoryIcon(product.category), size: 36)),
-          loadingBuilder: (context, child, progress) => progress == null
-            ? child : Container(height: height, color: const Color(0xFFF2EBF4),
-              child: const Center(child: CircularProgressIndicator(strokeWidth: 2))));
-      });
+      XyProductArt(product: product, height: height);
 
   static IconData _categoryIcon(String cat) => switch (cat) {
     'shoes' => Icons.hiking_outlined,
@@ -126,19 +105,8 @@ class _XyMarketplacePageState extends State<XyMarketplacePage> {
               const SizedBox(height: 7),
               Text(product.subtitle),
               const SizedBox(height: 10),
-              const Text('展示图仅为风格参考，并非真实在售商品；不会发货。',
+              const Text('商品插画与对应品类及配色一致；全部为虚拟商品，不会发货。',
                 style: TextStyle(fontSize: 12)),
-              FutureBuilder<List<XyCatalogPhoto>>(
-                future: _photos.fetchFor(product), builder: (context, data) {
-                  final list = data.data ?? const <XyCatalogPhoto>[];
-                  if (list.isEmpty) return const SizedBox.shrink();
-                  final photo = list[product.photoSlot % list.length];
-                  return Padding(padding: const EdgeInsets.symmetric(vertical: 12),
-                    child: SelectableText(
-                      '图片：Wikimedia Commons · ${photo.license}\n'
-                      '作者：${photo.credit}\n来源：${photo.sourcePage}',
-                      style: const TextStyle(fontSize: 11)));
-                }),
               const SizedBox(height: 10),
               FilledButton.icon(onPressed: () async {
                 Navigator.pop(ctx);
@@ -299,7 +267,7 @@ class _XyMarketplacePageState extends State<XyMarketplacePage> {
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             const Text('买下一点喜欢的日常 ♡',
               style: TextStyle(fontWeight: FontWeight.bold, fontSize: 21)),
-            const Text('300 件虚拟商品 · 线上公益图库配图 · 不产生真实付款或配送',
+            const Text('300 件虚拟商品 · 对应品类的本地插画 · 不产生真实付款或配送',
               style: TextStyle(fontSize: 11)),
             const SizedBox(height: 12),
             TextField(controller: _search, onChanged: (_) => setState(() {}),
@@ -328,7 +296,12 @@ class _XyMarketplacePageState extends State<XyMarketplacePage> {
               child: InkWell(onTap: () => _details(p),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Expanded(child: SizedBox(width: double.infinity, child: _photo(p))),
+                    Expanded(child: Stack(children:[
+                      Positioned.fill(child:_photo(p)),
+                      if((_cart[p.id]??0)>0) Positioned(top:6,right:6,child:Badge(
+                        label:Text('已加 ${_cart[p.id]}'),child:const Icon(
+                          Icons.shopping_bag,color:Color(0xFFAA6089)))),
+                    ])),
                     Padding(padding: const EdgeInsets.fromLTRB(10, 8, 10, 4),
                       child: Text(p.name, maxLines: 1, overflow: TextOverflow.ellipsis,
                         style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13))),
@@ -340,7 +313,10 @@ class _XyMarketplacePageState extends State<XyMarketplacePage> {
                         IconButton(tooltip: '加入购物车',
                           icon: const Icon(Icons.add_circle,
                             color: Color(0xFFB75983)),
-                          onPressed: () => _changeQuantity(p.id, 1)),
+                          onPressed: () async {
+                            await _changeQuantity(p.id, 1);
+                            _notify('已加入购物车 · 当前共 $_quantity 件');
+                          }),
                       ])),
                   ])));
           })),
