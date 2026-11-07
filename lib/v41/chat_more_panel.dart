@@ -62,7 +62,9 @@ class XyRedEnvelopeDraft {
   final String message;
   final String cover;
   final String coverPath;
-  const XyRedEnvelopeDraft(this.amount,this.message,this.cover,{this.coverPath = ''});
+  final bool replyWithModel;
+  const XyRedEnvelopeDraft(this.amount,this.message,this.cover,
+      {this.coverPath = '', this.replyWithModel = false});
 }
 class XyRedEnvelopeComposer extends StatefulWidget {
   final String recipient;
@@ -77,6 +79,7 @@ class _XyRedEnvelopeComposerState extends State<XyRedEnvelopeComposer> {
   String cover='樱花祝福';
   String coverPath='';
   bool uploading=false;
+  bool replyWithModel=false;
   Future<void> _selectCover() async {
     if(uploading)return;
     setState(()=>uploading=true);
@@ -121,6 +124,10 @@ class _XyRedEnvelopeComposerState extends State<XyRedEnvelopeComposer> {
       const SizedBox(height:16),
       Text('当前虚拟余额：${widget.balance} 星币 · 不涉及真实资金',
         style:const TextStyle(fontSize:12,color:Colors.black54)),
+      SwitchListTile(value:replyWithModel,
+        onChanged:(value)=>setState(()=>replyWithModel=value),
+        title:const Text('让 AI 收到红包后真实回复'),
+        subtitle:const Text('默认关闭。开启后调用一次角色原来的付费聊天 API。')),
       const SizedBox(height:20),
       FilledButton(style:FilledButton.styleFrom(backgroundColor:const Color(0xFFD95D4F),
           minimumSize:const Size.fromHeight(52)),onPressed:(){
@@ -129,7 +136,8 @@ class _XyRedEnvelopeComposerState extends State<XyRedEnvelopeComposer> {
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
             content:Text('请输入 1～500 星币且不超过余额的金额。')));return;
         }
-        Navigator.pop(context,XyRedEnvelopeDraft(count,note.text.trim(),cover,coverPath:coverPath));
+        Navigator.pop(context,XyRedEnvelopeDraft(count,note.text.trim(),cover,
+          coverPath:coverPath,replyWithModel:replyWithModel));
       },child:const Text('塞钱进红包',style:TextStyle(fontSize:16,fontWeight:FontWeight.bold))),
     ]));
 }

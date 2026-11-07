@@ -33,14 +33,41 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
   }
   Future<void> _init() async {
     final p = await DigitalPersonStore.load(widget.roleId);
+    // Android STT and system TTS are independent services.
+    // Missing STT must not prevent text sending or speech playback.
     try {
       available = await recognizer.initialize();
+      status = available ? '点击麦克风，说完后发送' :
+        '本机没有可用的系统语音识别服务。可以继续输入文字。';
+    } catch (_) {
+      available = false;
+      status = '本机没有可用的系统语音识别服务。可以继续输入文字。';
+    }
+    try {
       await speaker.setLanguage('zh-CN');
       await speaker.setSpeechRate(.49);
-      status = available ? '点击麦克风，说完后发送' : '系统语音识别不可用；仍可文字交流';
-    } catch (e) { status = '系统语音服务不可用：$e'; }
+    } catch (_) { /* TTS may have no Chinese voice; manual text remains available. */ }
     if (mounted) setState(() => profile = p);
   }
+  void _speechHelp() {
+    showDialog<void>(context: context, builder: (ctx) => AlertDialog(
+      title: const Text('无法使用语音识别'),
+      content: const SingleChildScrollView(child: Text(
+        '此功能使用手机的 Android 系统语音识别，并不依赖聊天大模型 API。\n\n'
+        '你可以先检查：\n'
+        '1. 在手机设置中允许「小雨机」使用麦克风；\n'
+        '2. 检查是否安装、启用了系统语音识别服务（例如 Google 语音识别与合成，或手机厂商自带服务）；\n'
+        '3. 在语言与输入法／语音输入设置中选择可用服务；\n'
+        '4. 如果仍报错，检查新 APK 的 AndroidManifest.xml 是否包含 RecognitionService 的 <queries> 声明。\n\n'
+        '没有该服务时，仍可发送文字并由原聊天模型回复。')),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('关闭')),
+        FilledButton(onPressed: () { Navigator.pop(ctx); _init(); },
+          child: const Text('重新检测')),
+      ],
+    ));
+  }
+
   void _toast(Object e) {
     if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
   }
@@ -115,14 +142,19 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
         Positioned(left: 12, right: 12, bottom: 0, child: SafeArea(child:
           Card(color: Colors.white.withValues(alpha: .95), child: Padding(
             padding: const EdgeInsets.all(12), child: Column(mainAxisSize: MainAxisSize.min, children: [
-              Text(status, style: Theme.of(context).textTheme.titleSmall),
+              if (!available) ListTile(
+                leading:const Icon(Icons.mic_off_outlined,color:Color(0xFF8A70AD)),
+                title:Text(status),
+                subtitle:const Text('这是设备语音服务问题，不影响原聊天模型。'),
+                trailing:TextButton(onPressed:_speechHelp,child:const Text('解决方法')),
+              ) else Text(status, style: Theme.of(context).textTheme.titleSmall),
               if (reply.isNotEmpty) Padding(padding: const EdgeInsets.all(8),
                 child: Text('$name：$reply', maxLines: 4, overflow: TextOverflow.ellipsis)),
               Slider(min: .5, max: 1.8, value: c.scale.clamp(.5, 1.8).toDouble(),
                 onChanged: (v) => setState(() => c.scale = v),
                 onChangeEnd: (_) => DigitalPersonStore.save(c)),
               Row(children: [
-                IconButton(onPressed: sending ? null : _mic,
+                IconButton(onPressed: sending || (!available && !listening) ? null : _mic,
                   icon: Icon(listening ? Icons.stop_circle : Icons.mic_none_rounded),
                   tooltip: listening ? '结束识别' : '开始说话'),
                 Expanded(child: TextField(controller: input, maxLines: 2,

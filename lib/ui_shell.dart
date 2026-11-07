@@ -69,9 +69,11 @@ class PhoneHomeScreen extends StatefulWidget {
 class _PhoneHomeScreenState extends State<PhoneHomeScreen>
     with WidgetsBindingObserver {
   Timer? _socialTimer;
+  bool _foreground = true;
   final _random = math.Random();
   void _planSocial() {
     _socialTimer?.cancel();
+    if (!_foreground) return;
     // Foreground only, randomized 25-50 minute intervals and existing hourly caps.
     _socialTimer = Timer(Duration(minutes:25+_random.nextInt(26)),() {
       if(!mounted)return;
@@ -80,15 +82,29 @@ class _PhoneHomeScreenState extends State<PhoneHomeScreen>
     });
   }
   void _checkSocial() {
-    if(controller.data.autoMomentPosting) {
-      unawaited(controller.maybeAutoPostMoment().catchError((Object _) => null));
-    }
-    if(controller.data.autoMomentInteractions) {
-      unawaited(controller.maybeAutoSocialSweep().catchError((Object _) => null));
-    }
+    if (_foreground && mounted) unawaited(_runSocialChecks());
+  }
+  Future<void> _runSocialChecks() async {
+    try {
+      if (controller.data.autoMomentPosting) {
+        await controller.maybeAutoPostMoment();
+      }
+      if (controller.data.autoMomentInteractions) {
+        await controller.maybeAutoSocialSweep();
+      }
+    } catch (_) { /* Opt-in background check; never block the desktop. */ }
   }
   @override void didChangeAppLifecycleState(AppLifecycleState state) {
-    if(state==AppLifecycleState.resumed) _checkSocial();
+    if (state == AppLifecycleState.resumed) {
+      _foreground = true;
+      _planSocial();
+      _checkSocial();
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached) {
+      _foreground = false;
+      _socialTimer?.cancel();
+    }
   }
   @override void dispose() {
     _socialTimer?.cancel();WidgetsBinding.instance.removeObserver(this);

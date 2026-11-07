@@ -64,7 +64,7 @@ jobs:
       - name: Publish APK to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v4.2.0-b${{ github.run_number }}
-          name: 小雨机 4.2.0 构建 ${{ github.run_number }}
-          body: 正式签名 APK（小雨机 V4.2），覆盖安装即可（不要卸载）。对应提交 ${{ github.sha }}。
+          tag_name: v4.2.1-b${{ github.run_number }}
+          name: 小雨机 4.2.1 构建 ${{ github.run_number }}
+          body: 正式签名 APK（小雨机 V4.2.1），覆盖安装即可（不要卸载）。对应提交 ${{ github.sha }}。
           files: build/app/outputs/flutter-apk/app-release.apk

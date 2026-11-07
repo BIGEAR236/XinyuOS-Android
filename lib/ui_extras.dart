@@ -52,6 +52,11 @@ class _MomentsTabState extends State<MomentsTab> {
           await XyMomentPhotoStore.set(controller.data.moments.first.id,photo);
           if(mounted)setState((){});
         }
+        if (controller.data.autoMomentInteractions) {
+          controller.maybeAutoSocialSweep().then((error) {
+            if (mounted && error != null) uiError(context,error);
+          });
+        }
       }
     } finally { input.dispose(); }
   }
@@ -65,15 +70,6 @@ class _MomentsTabState extends State<MomentsTab> {
     final saved=controller.local.resolve(relative);
     if(await saved.length()>8*1024*1024){await saved.delete();throw const FormatException('图片最大 8MB');}
     return relative;
-  }
-
-  Future<void> _attachMomentPhoto(MomentEntry moment) async {
-    try {
-      final photo=await _pickMomentPhoto();
-      if(photo==null)return;
-      await XyMomentPhotoStore.set(moment.id,photo);
-      if(mounted)setState((){});
-    }catch(e){if(mounted)uiError(context,e);}
   }
 
   Future<void> _showOptions() async {
@@ -115,7 +111,7 @@ class _MomentsTabState extends State<MomentsTab> {
       builder: (sheetContext) => StatefulBuilder(builder: (sheetContext, refresh) =>
         SafeArea(child: Padding(padding: const EdgeInsets.all(18),
           child: ListView(shrinkWrap: true, children: [
-            const Text('朋友圈互动设置',
+            const Text('朋友圈自动互动（需主动开启，可能产生 API 费用）',
               style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
             SwitchListTile(title: const Text('允许 AI 定期发布朋友圈（前台）'),
               subtitle: const Text('默认关闭。打开后会将相关聊天片段发给该角色的模型以生成虚拟动态；可能产生额外 API 费用。关闭 App 时不会后台生成。'),
@@ -123,6 +119,11 @@ class _MomentsTabState extends State<MomentsTab> {
               onChanged: (value) {
                 controller.setAutoMomentPosting(value);
                 refresh(() {});
+                if (value) {
+                  controller.maybeAutoPostMoment().then((error) {
+                    if (mounted && error != null) uiError(context,error);
+                  });
+                }
               }),
             if (controller.data.autoMomentPosting)
               ListTile(title: const Text('每位 AI 的最短发布间隔'),
@@ -135,12 +136,17 @@ class _MomentsTabState extends State<MomentsTab> {
                     if (hours!=null) controller.setAutoMomentHours(hours);
                     refresh(() {});
                   })),
-            SwitchListTile(title: const Text('打开朋友圈时自动邀请好友互动'),
+            SwitchListTile(title: const Text('AI 自动点赞和评论'),
               subtitle: const Text('默认关闭。启用后在 App 前台按随机时间检查；最多每小时 1 条动态、2 位 AI，可能产生 API 费用。'),
               value: controller.data.autoMomentInteractions,
               onChanged: (value) {
                 controller.setAutoMomentInteractions(value);
                 refresh(() {});
+                if (value) {
+                  controller.maybeAutoSocialSweep().then((error) {
+                    if (mounted && error != null) uiError(context,error);
+                  });
+                }
               }),
             const Divider(),
             const ListTile(title: Text('各 AI 自主发帖权限'),
@@ -155,7 +161,30 @@ class _MomentsTabState extends State<MomentsTab> {
                   await SharedPreferencesAsync().setBool('v41.roleMoment.${role.id}.enabled',enabled);
                   if(enabled && !role.allowMoments)controller.allowMoments(role.id,true);
                   refresh(() {});
+                  if (enabled && controller.data.autoMomentPosting) {
+                    controller.maybeAutoPostMoment().then((error) {
+                      if (mounted && error != null) uiError(context,error);
+                    });
+                  }
                 }))),
+            const Divider(),
+            const ListTile(title:Text('允许哪些 AI 自主点赞和评论'),
+              subtitle:Text('只有授权的角色才会收到朋友圈内容并调用原聊天模型。AI 之间的动态仍遵循已建立的好友关系。')),
+            ...controller.data.characters.map((role) => SwitchListTile(
+              title:Text(role.name),
+              subtitle:Text(role.allowSocialInteractions
+                ? '已允许参与朋友圈评论与点赞' : '不参与朋友圈自动互动'),
+              value:role.allowSocialInteractions,
+              onChanged:(value) {
+                controller.setSocialPermission(role.id,value);
+                refresh(() {});
+                if(value && controller.data.autoMomentInteractions){
+                  controller.maybeAutoSocialSweep().then((error){
+                    if(mounted && error!=null)uiError(context,error);
+                  });
+                }
+              },
+            )),
             SwitchListTile(title: const Text('我评论后让 AI 自动回复'),
               subtitle: const Text('默认关闭。打开后最多调用两位已授权 AI，可能产生 API 费用。'),
               value: controller.data.autoMomentReplies,
@@ -196,11 +225,6 @@ class _MomentsTabState extends State<MomentsTab> {
     } finally { text.dispose(); }
   }
 
-  Future<void> _invite(MomentEntry moment) async {
-    final error = await controller.inviteMomentInteractions(moment.id);
-    if (mounted && error != null) uiError(context, error);
-  }
-
   Future<void> _reply(MomentEntry m, MomentComment comment) async {
     final error = await controller.replyToMomentComment(m.id, comment.id);
     if (mounted && error != null) uiError(context, error);
@@ -235,7 +259,6 @@ class _MomentsTabState extends State<MomentsTab> {
 
   Widget _momentCard(BuildContext context, MomentEntry m) {
     final c = controller.character(m.characterId);
-    final busy = controller.busy.contains('moment_interact:${m.id}');
     return Padding(padding: const EdgeInsets.fromLTRB(14, 14, 14, 18),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
@@ -272,16 +295,9 @@ class _MomentsTabState extends State<MomentsTab> {
             icon: Icon(m.likedBy.contains('me') ? Icons.favorite : Icons.favorite_border,
               size: 18, color: m.likedBy.contains('me') ? Colors.redAccent : null),
             label: Text('点赞 ${m.likedBy.length}')),
-          IconButton(tooltip:'添加动态图片',onPressed:()=>_attachMomentPhoto(m),
-            icon:const Icon(Icons.add_photo_alternate_outlined)),
           TextButton.icon(onPressed: () => _comment(m),
             icon: const Icon(Icons.mode_comment_outlined, size: 18),
             label: Text('评论 ${m.comments.length}')),
-          TextButton.icon(onPressed: busy ? null : () => _invite(m),
-            icon: busy ? const SizedBox(width: 15, height: 15,
-              child: CircularProgressIndicator(strokeWidth: 2)) :
-              const Icon(Icons.auto_awesome_outlined, size: 17),
-            label: const Text('好友互动')),
         ]),
         if (m.likedBy.isNotEmpty || m.comments.isNotEmpty)
           Container(width: double.infinity,
@@ -311,8 +327,10 @@ class _MomentsTabState extends State<MomentsTab> {
         child: Row(children: [
           const Icon(Icons.group_outlined, size: 16),
           const SizedBox(width: 8),
-          const Expanded(child: Text('朋友圈只在本机模拟。好友需要建立关系并获得互动授权。',
-            style: TextStyle(fontSize: 11))),
+          Expanded(child: Text(
+            '自动发动态：${controller.data.autoMomentPosting ? '已开启' : '关闭'}  ·  '
+            '自动点赞评论：${controller.data.autoMomentInteractions ? '已开启' : '关闭'}',
+            style: const TextStyle(fontSize: 11))),
           IconButton(tooltip: '朋友圈设置', onPressed: _settings,
             icon: const Icon(Icons.settings_outlined)),
         ])),

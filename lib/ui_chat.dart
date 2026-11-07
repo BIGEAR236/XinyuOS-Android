@@ -24,6 +24,7 @@ import 'v41/chat_pet_companion.dart';
 import 'v41/avatar_core.dart';
 import 'v41/owned_gift_page.dart';
 import 'v42/product_illustration.dart';
+import 'v43/red_packet_presenter.dart';
 import 'v40/catalog.dart';
 import 'v40/marketplace_page.dart';
 
@@ -274,8 +275,12 @@ class _ChatScreenState extends State<ChatScreen> {
         controller:widget.controller)));
     if(draft==null||!mounted)return;
     if(!widget.controller.giveRedEnvelope(friend.id,draft.amount,
-        note:'${draft.cover} · ${draft.message}',coverPath:draft.coverPath)) {
+        note:draft.message,coverPath:draft.coverPath)) {
       uiError(context,'红包发送失败：金额无效或虚拟余额不足。');
+    } else if (draft.replyWithModel) {
+      final error = await widget.controller.respondToVirtualPresent(friend.id,
+        description:'一份红包（祝福：${draft.message}）');
+      if (mounted && error != null) uiError(context,error);
     }
   }
 
@@ -620,10 +625,10 @@ class ChatBubble extends StatelessWidget {
                               width:190,height:90,fit:BoxFit.cover)),
                         ],
                         const SizedBox(height:9),
-                        Text(entry.text.replaceFirst('🧧 虚拟红包 ',''),
+                        Text(XyRedPacketPresenter.blessing(entry.text),
                           style:const TextStyle(color:Colors.white)),
                         const SizedBox(height:5),
-                        const Text('对方已收下 · 仅为虚拟金币',
+                        const Text('对方已收下',
                           style:TextStyle(color:Colors.white70,fontSize:11)),
                       ]))
                     else if (!giftCard && entry.text != '[图片]')

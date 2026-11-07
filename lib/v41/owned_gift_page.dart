@@ -34,10 +34,9 @@ class _XyOwnedGiftPageState extends State<XyOwnedGiftPage> {
       }
       await _load();
       if(immediateReply){
-        final role=widget.controller.character(widget.roleId)!;
-        final error=await widget.controller.sendPrivate(role,
-          '我刚刚把我的已购虚拟礼物「${product.name}」送给了你，你喜欢吗？');
-        if(error!=null)throw StateError('礼物已发送，但模型回复失败：$error');
+        final error = await widget.controller.respondToVirtualPresent(
+          widget.roleId, description:'${product.name}（虚拟礼物）');
+        if (error != null) throw StateError(error);
       }
       if(mounted)ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content:Text('礼物已赠送 · 已购库存 -1')));
@@ -53,8 +52,8 @@ class _XyOwnedGiftPageState extends State<XyOwnedGiftPage> {
         const SizedBox(height:7),
         const Text('只有已经购买的虚拟商品能赠送；每送出一件就会从物品库减少一件。'),
         SwitchListTile(value:immediateReply,onChanged:(v)=>setState(()=>immediateReply=v),
-          title:const Text('收到礼物后让 AI 立即回复'),
-          subtitle:const Text('默认关闭；开启后会额外调用角色绑定的付费聊天 API。')),
+          title:const Text('让 AI 真正收到礼物并回复'),
+          subtitle:const Text('默认关闭以避免额外费用。开启后每件礼物会额外调用一次角色原有的聊天 API。')),
         const Divider(),
         if(bag.isEmpty)const Padding(padding:EdgeInsets.all(20),
           child:Text('购物袋还是空的。先去星愿商城买喜欢的物品吧。')),
@@ -65,7 +64,7 @@ class _XyOwnedGiftPageState extends State<XyOwnedGiftPage> {
               title:Text(xyProductById[entry.key]!.name),
               subtitle:Text('剩余 ${entry.value} 件'),
               trailing:FilledButton.tonal(onPressed:sending?null:()=>_send(xyProductById[entry.key]!),
-                child:const Text('赠送')))),
+                child:Text(immediateReply?'赠送并让AI回复':'仅赠送')))),
         const SizedBox(height:12),
         FilledButton.icon(onPressed:()=>Navigator.push(context,MaterialPageRoute(builder:(_)=>
           XyMarketplacePage(controller:widget.controller,roleId:widget.roleId))).then((_)=>_load()),

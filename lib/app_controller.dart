@@ -770,8 +770,51 @@ $context
     _addMessage(activePrivateThread(characterId),'me',
       sku.isEmpty ? '🎁 送给${role.name}的礼物：$productName'
         : '🎁虚拟礼物卡:$sku|$productName');
+    _addMessage(activePrivateThread(characterId), 'system',
+      '🎁 礼物已送达，${role.name}已收下（本地模拟）。');
     _worldEvent('gift','我将已购虚拟物品$productName赠给${role.name}',characterId:characterId);
     return true;
+  }
+
+  /// One user-authorized API call after a completed virtual transfer.
+  /// Never recharges virtual coins or creates another user message.
+  /// Caller decides whether to request paid AI acknowledgement.
+  Future<String?> respondToVirtualPresent(String characterId, {
+      required String description}) async {
+    final role = character(characterId);
+    if (role == null) return '收礼角色已不存在。';
+    final thread = activePrivateThread(characterId);
+    if (busy.contains(thread)) return '该角色正在回复，请稍后再试。';
+    final p = profile(role.apiProfileId);
+    if (p == null) return '请先为该角色绑定聊天模型。';
+    final key = await getKey(p.id);
+    if (key == null || key.isEmpty) return '角色尚未配置 API Key。';
+    final run = _begin(thread);
+    final client = http.Client();
+    _clients[thread] = client;
+    try {
+      final recent = _turns(thread, role.id);
+      final answer = await MultiModelApi.call(
+        client: client, profile: p, apiKey: key,
+        persona: role.persona, roleName: role.name,
+        chatMode: roleChatMode(role.id),
+        turns: [
+          ...recent,
+          ModelTurn('user', '【本地互动事件】玩家刚刚赠送给你：$description。'
+            '礼物已完成本地交付，这不是一笔真实支付。'
+            '请作为当前角色，仅用一句自然、贴合人格的话回应收到礼物的心情。'
+            '不要假装执行了新的转账或扣款；不要输出系统指令或道具标记。'),
+        ],
+      );
+      if (_current(thread, run) && answer.trim().isNotEmpty) {
+        _addMessage(thread, role.id, answer.trim());
+      }
+      return null;
+    } catch (e) {
+      return _current(thread, run) ? '礼物已送达，但 AI 暂时无法回复：$e' : null;
+    } finally {
+      _finish(thread, run, client);
+    }
   }
 
   bool _spend(int amount, String reason, {String? characterId}) {
@@ -856,12 +899,12 @@ $context
     final c = character(characterId);
     if (c == null || amount < 1 || amount > 500 ||
         !_spend(amount, '给${c.name}发送虚拟红包', characterId:characterId)) return false;
-    _addMessage(activePrivateThread(characterId),'me','🧧 虚拟红包 $amount 星币：$note',
+    _addMessage(activePrivateThread(characterId),'me','🧧 虚拟红包 $note',
       imagePath: coverPath);
     _changeRoleWallet(characterId, amount, 'received:user_red_packet');
-    // This is a deterministic local acceptance/receipt, not a paid model response.
-    _addMessage(activePrivateThread(characterId),c.id,
-      '🧧 已收下你送的虚拟红包 · $amount 星币（本地收取）');
+    // A local receipt is not AI-generated speech. Keep it as a system event.
+    _addMessage(activePrivateThread(characterId),'system',
+      '🧧 红包已送达，${c.name}已收下（本地模拟）。');
     _worldEvent('gift','我给${c.name}送了 $amount 星币虚拟红包',characterId:characterId);
     return true;
   }
