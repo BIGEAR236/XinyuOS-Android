@@ -154,7 +154,7 @@ class _PhoneHomeScreenState extends State<PhoneHomeScreen>
         icon=Icons.note_alt_rounded;title='备忘录';
         color=const Color(0xFFE4BC92);
         destination=XyNotebookShell(notebookKey:'memo.me',title:'我的备忘录',
-          child:LocalNotesScreen(controller:controller,category:'memo'));break;
+          child:LocalNotesScreen(controller:controller,category:'memo',embedded:true));break;
       case 'diary':
         icon=Icons.auto_stories_rounded;title='日记';
         color=const Color(0xFFC59FC3);destination=XyDiaryLibraryPage(controller:controller);break;

@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../core/companion.dart';
 import '../core/pet_engine.dart';
 import '../core/storage.dart';
@@ -12,25 +15,44 @@ class PetPage extends StatefulWidget {
 }
 class _PetPageState extends State<PetPage> {
   final storage=CompanionStorage();
+  final prefs=SharedPreferencesAsync();
   PetState? pet;
   String status='孵化的惊喜，藏在每次陪伴里';
+  String? reaction; // Transient expression after an action, e.g. '享受'.
+  String? badge;    // Floating emoji feedback, e.g. '💗'.
+  Timer? _reactionTimer;
+  bool chatPetVisible=true;
+  String get chatPetKey=>'v41.petHidden.${widget.agent.roleId}';
   @override void initState(){super.initState();load();}
+  @override void dispose(){_reactionTimer?.cancel();super.dispose();}
   Future<void> load() async {
     final p=await storage.getPet(widget.agent.roleId);
+    final hidden=await prefs.getBool(chatPetKey)??false;
     if(!mounted) return;
     p.decay(DateTime.now());
     setState(()=>pet=p);
+    setState(()=>chatPetVisible=!hidden);
   }
   void save(){final p=pet;if(p!=null) storage.setPet(widget.agent.roleId,p);}
   void action(String value){
     final p=pet;if(p==null) return;
     final now=DateTime.now();
-    if (!p.canInteract(now)) {
-      setState(()=>status=p.act(value,now));
-      return;
+    final result=p.act(value,now);
+    setState(()=>status=result);
+    save();
+    if(p.isHatched){
+      // Instant expression + floating badge so care feels alive, not text-only.
+      setState((){
+        reaction=const {'喂食':'享受','玩球':'兴奋','洗澡':'享受','睡觉':'困倦','抚摸':'享受',
+          '挠痒痒':'兴奋','轻拍':'享受','训练':'兴奋','探险':'兴奋'}[value]??'开心';
+        badge=const {'喂食':'🍗','玩球':'⚽','洗澡':'🫧','睡觉':'💤','抚摸':'💗',
+          '挠痒痒':'✨','轻拍':'💗','训练':'⭐','探险':'🌈'}[value]??'✨';
+      });
+      _reactionTimer?.cancel();
+      _reactionTimer=Timer(const Duration(seconds:2),(){
+        if(mounted)setState((){reaction=null;badge=null;});});
     }
-    setState(()=>status=p.act(value,now));
-    save();widget.agent.event('你们共同照顾宠物。宠物：${p.kind?.name ?? p.egg}；性格：${p.kind?.trait ?? '尚未孵化'}；动作：$value；结果：$status；当前心情：${p.expression}。请围绕当前动作自然回应。');
+    widget.agent.event('你们共同照顾宠物。宠物：${p.kind?.name ?? p.egg}；性格：${p.kind?.trait ?? '尚未孵化'}；动作：$value；结果：$result；当前心情：${p.expression}。请围绕当前动作自然回应。');
   }
   Future<void> changeEgg() async {
     final next=await showModalBottomSheet<String>(context:context,builder:(context)=>SafeArea(child:Column(mainAxisSize:MainAxisSize.min,children:[
@@ -88,7 +110,8 @@ class _PetPageState extends State<PetPage> {
         Card(color:const Color(0xFFFFF2FA),elevation:0,child:Padding(padding:const EdgeInsets.all(12),child:Column(children:[
           Text(p.isHatched ? '${p.kind?.emoji ?? ''} ${p.name} · Lv.${p.level}' : '${p.egg} · 等待孵化',style:const TextStyle(fontWeight:FontWeight.w700,fontSize:19)),
           const SizedBox(height:10),
-          Center(child:CutePetArt(egg:!p.isHatched,eggTheme:p.egg,species:p.kind,mood:p.expression,strokes:p.strokes)),
+          Center(child:CutePetArt(egg:!p.isHatched,eggTheme:p.egg,species:p.kind,
+            mood:reaction??p.expression,strokes:p.strokes,badge:badge)),
           const SizedBox(height:8),
           Text(status,textAlign:TextAlign.center,style:const TextStyle(color:Color(0xFF776375))),
           const SizedBox(height:12),
@@ -107,7 +130,17 @@ class _PetPageState extends State<PetPage> {
             const SizedBox(height:12),
             Text('Lv.${p.level} · 当前心情：${p.expression} · 经验 ${p.xp}/${p.level*90}'),
             LinearProgressIndicator(value:p.xp/(p.level*90)),
-            Text('下一次有效照顾约 ${p.remainingCooldown(DateTime.now()).inMinutes + 1} 分钟后'),
+            const Text('孵化后随时都能和它互动，不再有次数限制。',style:TextStyle(fontSize:11,color:Colors.black54)),
+            const SizedBox(height:6),
+            SwitchListTile(
+              contentPadding:EdgeInsets.zero,
+              title:const Text('在聊天页显示宠物浮窗'),
+              subtitle:const Text('关闭后当前角色的聊天界面不再显示宠物，宠物存档保留。',style:TextStyle(fontSize:11)),
+              value:chatPetVisible,
+              onChanged:(v)async{
+                await prefs.setBool(chatPetKey,!v);
+                if(mounted)setState(()=>chatPetVisible=v);
+              }),
           ],
         ]))),
         const SizedBox(height:12),
@@ -120,7 +153,7 @@ class _PetPageState extends State<PetPage> {
               onPressed:()=>s=='绘画'?drawEgg():action(s)),
         ]),
         const SizedBox(height:12),
-        const Text('每个 AI 好友有独立存档。每小时最多一次有效照顾；进度和等级存于本机。右下角圆形按钮打开聊天。',style:TextStyle(color:Colors.black54,fontSize:12)),
+        const Text('孵化前每小时最多一次有效陪伴；孵化成宠物后随时互动。每个 AI 好友有独立存档，进度和等级存于本机。右下角圆形按钮打开聊天。',style:TextStyle(color:Colors.black54,fontSize:12)),
       ]),
     );
   }

@@ -104,16 +104,20 @@ class PetState {
     }
   }
 
-  /// Successful care changes stats at most once per REAL elapsed hour.
-  /// Local clock can be manually changed, so this is best-effort without a server.
+  /// Successful care changes stats at most once per REAL elapsed hour
+  /// while still an egg (hatch pacing). A hatched pet may be cared for
+  /// anytime; the local clock is best-effort without a server.
   String act(String action, DateTime now) {
-    if (!canInteract(now)) {
-      final left = remainingCooldown(now);
-      final minutes = (left.inMinutes + (left.inSeconds % 60 > 0 ? 1 : 0));
-      return '每小时只能进行一次有效照顾，再等约 $minutes 分钟。可以自由聊天和画蛋壳。';
+    if (!isHatched) {
+      if (!canInteract(now)) {
+        final left = remainingCooldown(now);
+        final minutes = (left.inMinutes + (left.inSeconds % 60 > 0 ? 1 : 0));
+        return '孵化期每小时只能进行一次有效陪伴，再等约 $minutes 分钟。孵化后就能随时和它玩啦。可以自由聊天和画蛋壳。';
+      }
+    } else {
+      lastInteractionAt = now.millisecondsSinceEpoch; // Recorded, never gates play.
     }
     decay(now);
-    lastInteractionAt = now.millisecondsSinceEpoch;
     interactionCount++;
     if (!isHatched) {
       final delta = {'唱歌': 8, '抚摸': 6, '讲故事': 11, '摇篮曲': 9, '绘画': 5, '拥抱': 7}[action] ?? 5;

@@ -1,7 +1,7 @@
 name: xinyu_os
 publish_to: none
 description: 心屿 OS — 跨平台 AI 虚拟手机（本地优先）
-version: 4.2.1+16
+version: 4.3.0+17
 
 environment:
   sdk: '>=3.10.0 <4.0.0'

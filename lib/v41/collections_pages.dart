@@ -72,12 +72,12 @@ class XyDiaryLibraryPage extends StatelessWidget {
       const SizedBox(height:18),
       _book(context,'我的日记','写下自己的小秘密',const Color(0xFFF5BCD1),
         () => XyNotebookShell(notebookKey:'diary.me',title:'我的日记',
-          child:LocalNotesScreen(controller:controller,category:'diary'))),
+          child:LocalNotesScreen(controller:controller,category:'diary',embedded:true))),
       for(final role in controller.data.characters)
         _book(context,'${role.name}的日记','AI 生成草稿 · 手动记录 · 本地归档',
           const Color(0xFFD3C7F4),
           () => XyNotebookShell(notebookKey:'diary.${role.id}',title:'${role.name}的日记',
-            child:AiJournalPage(controller:controller,roleId:role.id))),
+            child:AiJournalPage(controller:controller,roleId:role.id,embedded:true))),
     ]));
   Widget _book(BuildContext context,String title,String detail,Color tint,Widget Function() page) =>
     Card(elevation:0,color:tint.withValues(alpha:.32),margin:const EdgeInsets.only(bottom:12),

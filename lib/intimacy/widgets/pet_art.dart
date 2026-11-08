@@ -8,7 +8,9 @@ class CutePetArt extends StatefulWidget {
   final bool egg;
   final String eggTheme;
   final List<List<List<double>>> strokes;
-  const CutePetArt({super.key, this.species, this.mood='开心', this.egg=false, this.eggTheme='云朵蛋', this.strokes=const []});
+  /// Transient care feedback emoji (e.g. '💗') that floats up and fades.
+  final String? badge;
+  const CutePetArt({super.key, this.species, this.mood='开心', this.egg=false, this.eggTheme='云朵蛋', this.strokes=const [], this.badge});
   @override
   State<CutePetArt> createState() => _CutePetArtState();
 }
@@ -36,6 +38,18 @@ class _CutePetArtState extends State<CutePetArt> with SingleTickerProviderStateM
         if (!widget.egg && widget.species != null) Positioned(
           right: 3, bottom: 4,
           child: Text(widget.species!.emoji, style:const TextStyle(fontSize: 33))),
+        if (widget.badge != null) Positioned(
+          left: 0, right: 0, top: 18,
+          child: IgnorePointer(child: TweenAnimationBuilder<double>(
+            key: ValueKey(widget.badge),
+            tween: Tween(begin: 0, end: 1),
+            duration: const Duration(milliseconds: 1150),
+            builder: (context, t, child) => Opacity(
+              opacity: (1 - t).clamp(0.0, 1.0).toDouble(),
+              child: Transform.translate(
+                offset: Offset(0, -38 * t), child: child)),
+            child: Text(widget.badge!, textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 42))))),
       ])),
   );
 }
@@ -136,21 +150,42 @@ class _CritterPainter extends CustomPainter {
     }
     // Eyes and expression are state-driven rather than static imagery.
     for (final x in [91.0,146.0]) {
-      if (mood=='疲惫') {
+      if (mood=='疲惫' || mood=='困倦') {
         c.drawArc(Rect.fromCircle(center:Offset(x,132),radius:10),0,math.pi,false,Paint()..color=const Color(0xFF514F63)..strokeWidth=3.5..style=PaintingStyle.stroke);
+      } else if (mood=='享受' || mood=='兴奋') {
+        // Happy squinting crescents: the sharper arc reads as excitement.
+        c.drawArc(Rect.fromCircle(center:Offset(x,131),radius:mood=='兴奋'?12:10),math.pi*1.12,math.pi*0.76,false,Paint()..color=const Color(0xFF45465B)..strokeWidth=3.6..style=PaintingStyle.stroke..strokeCap=StrokeCap.round);
       } else {
         c.drawOval(Rect.fromCenter(center:Offset(x,134),width:13,height:mood=='开心'?20:13),Paint()..color=const Color(0xFF45465B));
         c.drawCircle(Offset(x-2,129),3,Paint()..color=Colors.white);
       }
     }
-    for(final x in [72.0,164.0]) { c.drawOval(Rect.fromLTWH(x,152,17,9),Paint()..color=const Color(0x77F78FB2)); }
-    c.drawArc(const Rect.fromLTWH(107,147,24,19),0.15,math.pi-0.3,false,Paint()..color=const Color(0xFF6A5667)..style=PaintingStyle.stroke..strokeCap=StrokeCap.round..strokeWidth=2.9);
+    for(final x in [72.0,164.0]) { c.drawOval(Rect.fromLTWH(x,152,17,9),Paint()..color=Color(mood=='享受'||mood=='兴奋'?0xAAF78FB2:0x77F78FB2)); }
     c.drawOval(const Rect.fromLTWH(80,195,35,19),ear); c.drawOval(const Rect.fromLTWH(124,195,35,19),ear);
     if (mood=='开心') { _star(c,184,69,10,const Color(0xFFFFE1A4)); }
+    if (mood=='兴奋') { _star(c,42,71,9,const Color(0xFFFFC94D)); _star(c,196,113,8,const Color(0xFFFFC94D)); }
+    if (mood=='享受') {
+      // Content closed-mouth smile with a little heart.
+      c.drawArc(const Rect.fromLTWH(103,151,30,14),0.25,math.pi-0.5,false,Paint()..color=const Color(0xFF6A5667)..style=PaintingStyle.stroke..strokeCap=StrokeCap.round..strokeWidth=2.9);
+      _heart(c,205,84,9,const Color(0xFFF78FB2));
+    } else {
+      c.drawArc(const Rect.fromLTWH(107,147,24,19),0.15,math.pi-0.3,false,Paint()..color=const Color(0xFF6A5667)..style=PaintingStyle.stroke..strokeCap=StrokeCap.round..strokeWidth=2.9);
+    }
+    if (mood=='困倦') {
+      c.drawOval(const Rect.fromLTWH(108,152,20,16),Paint()..color=const Color(0xFF8A7392)); // yawning mouth
+      c.drawOval(const Rect.fromLTWH(174,98,10,4),Paint()..color=const Color(0xFF9FB4C9));
+      c.drawOval(const Rect.fromLTWH(184,110,10,4),Paint()..color=const Color(0xFF9FB4C9));
+    }
     c.restore();
   }
   void _star(Canvas c, double x,double y,double radius,Color color) {
     final p=Path()..moveTo(x,y-radius)..lineTo(x+radius*.3,y-radius*.3)..lineTo(x+radius,y)..lineTo(x+radius*.3,y+radius*.3)..lineTo(x,y+radius)..lineTo(x-radius*.3,y+radius*.3)..lineTo(x-radius,y)..lineTo(x-radius*.3,y-radius*.3)..close();
+    c.drawPath(p,Paint()..color=color);
+  }
+  void _heart(Canvas c, double x,double y,double r,Color color) {
+    final p=Path()..moveTo(x,y+r*.9)
+      ..cubicTo(x-r*1.4,y-r*.1,x-r*.7,y-r*1.1,x,y-r*.35)
+      ..cubicTo(x+r*.7,y-r*1.1,x+r*1.4,y-r*.1,x,y+r*.9)..close();
     c.drawPath(p,Paint()..color=color);
   }
   @override bool shouldRepaint(covariant _CritterPainter old) => true;

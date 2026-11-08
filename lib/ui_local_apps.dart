@@ -11,8 +11,10 @@ import 'ui_shell.dart';
 class LocalNotesScreen extends StatelessWidget {
   final AppController controller;
   final String category;
+  /// Inside XyNotebookShell: drop our own AppBar so the title shows once.
+  final bool embedded;
   const LocalNotesScreen({super.key, required this.controller,
-    required this.category});
+    required this.category, this.embedded = false});
   bool get diary => category == 'diary';
 
   Future<void> _edit(BuildContext context, [LocalNote? existing]) async {
@@ -45,7 +47,8 @@ class LocalNotesScreen extends StatelessWidget {
     builder: (context, _) {
       final notes = controller.data.notes.where((n) => n.category == category).toList()
         ..sort((a,b) => b.updatedAt.compareTo(a.updatedAt));
-      return Scaffold(appBar: AppBar(title: Text(diary ? '我的日记' : '备忘录')),
+      return Scaffold(
+        appBar: embedded ? null : AppBar(title: Text(diary ? '我的日记' : '备忘录')),
         body: notes.isEmpty
           ? Center(child: Text(diary ? '还没有日记，写下今天的故事吧' : '还没有备忘录'))
           : ListView.separated(itemCount: notes.length,
