@@ -6,6 +6,8 @@ import 'package:speech_to_text/speech_to_text.dart' as speech;
 import '../app_controller.dart';
 import '../v42/animated_portrait.dart';
 import '../v43/offline_stt.dart';
+import '../v43/offline_tts.dart';
+import '../v43/tts_speech_filter.dart';
 import 'avatar_core.dart';
 
 /// Turn-based phone speech recognition -> original role LLM -> phone TTS.
@@ -31,6 +33,12 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
   /// the bundled sherpa-onnx engine for ROMs without any system service.
   String engine = 'system';
   final XyOfflineStt offline = XyOfflineStt();
+  /// Neural voice bank: voiceSid >= 0 speaks replies with the bundled
+  /// theresa model (sid), -1 keeps the system TTS. Persisted per role in
+  /// DigitalPersonConfig.voiceId as '' or 'sid:N'.
+  final XyOfflineTts voice = XyOfflineTts();
+  int voiceSid = -1;
+  bool voiceReady = false;
   /// Hands-free conversation loop: listen -> (endpoint) -> send -> TTS ->
   /// listen again. Only with the offline engine (native endpoint detection).
   bool convo = false;
@@ -43,13 +51,12 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
     speaker.setCompletionHandler(() {
       if (!mounted) return;
       setState(() => talking = false);
-      // Hands-free loop: resume listening right after the reply finished.
-      if (convo && convoState == 'speaking') _convoListen();
+      _onSpeakDone();
     });
     speaker.setErrorHandler((_) {
       if (!mounted) return;
       setState(() => talking = false);
-      if (convo && convoState == 'speaking') _convoListen();
+      _onSpeakDone();
     });
   }
   Future<void> _init() async {
@@ -80,7 +87,24 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
       await speaker.setLanguage('zh-CN');
       await speaker.setSpeechRate(.49);
     } catch (_) { /* TTS may have no Chinese voice; manual text remains available. */ }
+    _applyVoiceId(p.voiceId);
+    if (voiceSid >= 0) {
+      // Warm the neural voice bank in the background (first copy ~130MB).
+      voice.init().then((ok) {
+        if (mounted) setState(() => voiceReady = ok);
+      });
+    }
     if (mounted) setState(() => profile = p);
+  }
+  void _applyVoiceId(String value) {
+    voiceSid = value.startsWith('sid:') ?
+      int.tryParse(value.substring(4)) ?? -1 : -1;
+  }
+  Future<void> _persistVoiceId() async {
+    final p = profile;
+    if (p == null) return;
+    p.voiceId = voiceSid >= 0 ? 'sid:$voiceSid' : '';
+    await DigitalPersonStore.save(p);
   }
   void _speechHelp() {
     showDialog<void>(context: context, builder: (ctx) => AlertDialog(
@@ -162,11 +186,14 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
       final answer = messages.map((m) => m.text).join('\n').trim();
       if (!mounted) return;
       setState(() { reply = answer; input.clear(); status = '已收到回复'; });
-      if (answer.isNotEmpty) {
-        if (convo) setState(() => convoState = 'speaking');
-        await speaker.speak(answer.length > 900 ? answer.substring(0, 900) : answer);
+      // Speak only the spoken words: roleplay actions, markdown and gift
+      // tokens would otherwise be read aloud verbatim (esp. story mode).
+      final speakable = spokenText(
+          answer.length > 1200 ? answer.substring(answer.length - 1200) : answer);
+      if (speakable.isNotEmpty) {
+        await _speakOut(speakable);
       } else if (convo) {
-        _convoListen(); // Empty reply: skip TTS and keep listening.
+        _convoListen(); // Nothing speakable (pure actions): keep listening.
       }
     } catch (e) {
       _toast(e);
@@ -174,6 +201,102 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
       if (convo && mounted) _convoListen(); // Let the user retry by voice.
     }
     finally { if (mounted) setState(() => sending = false); }
+  }
+
+  // ---- Unified speech output (system TTS or bundled neural voices) ----
+  Future<void> _speakOut(String text) async {
+    final capped = text.length > 900 ? text.substring(0, 900) : text;
+    if (voiceSid >= 0 && voiceReady) {
+      if (convo) setState(() => convoState = 'speaking');
+      if (mounted) setState(() => talking = true);
+      await voice.speak(capped, sid: voiceSid);
+      if (!mounted) return;
+      setState(() => talking = false);
+      _onSpeakDone();
+    } else {
+      if (convo) setState(() => convoState = 'speaking');
+      await speaker.speak(capped); // completion handler calls _onSpeakDone.
+    }
+  }
+  void _onSpeakDone() {
+    // Hands-free loop: resume listening right after the reply finished.
+    if (convo && convoState == 'speaking') _convoListen();
+  }
+  Future<void> _stopSpeaking() async {
+    await speaker.stop();
+    await voice.stop();
+  }
+
+  // ---- Voice bank picker ----
+  Future<void> _voiceSheet() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheet) => StatefulBuilder(builder: (sheet, refresh) =>
+        SafeArea(child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
+          ListTile(title: Text('为「${widget.controller.character(widget.roleId)?.name ?? 'TA'}」选择音色',
+            style: const TextStyle(fontWeight: FontWeight.bold)),
+            subtitle: Text(voiceReady
+              ? '内置 ${voice.numSpeakers} 个音色（离线音色库）· 点“试听”后选“使用”'
+              : voiceSid >= 0 ? '离线音色引擎加载中（首次约 10 秒）…'
+              : '离线音色引擎未加载，选择音色后将自动加载'),
+          ),
+          RadioListTile<int>(
+            title: const Text('系统音色（手机自带）'),
+            subtitle: const Text('默认。音色取决于手机 TTS 引擎。'),
+            value: -1, groupValue: voiceSid,
+            onChanged: (v) { refresh(() {}); setState(() => voiceSid = v ?? -1); _persistVoiceId(); },
+          ),
+          const Divider(),
+          for (final preset in voicePresets)
+            ListTile(
+              leading: CircleAvatar(radius: 17, backgroundColor: const Color(0xFFEBD9F2),
+                child: Text(preset.name.substring(0, 1), style: const TextStyle(fontSize: 13))),
+              title: Text('${preset.name} · ${preset.desc}'),
+              subtitle: Text('编号 ${preset.sid} · 实际听感以试听为准'),
+              trailing: Wrap(spacing: 4, children: [
+                TextButton(onPressed: voiceReady ? () async {
+                  await speaker.stop();
+                  await voice.speak('你好，我是${preset.name}音色，很高兴认识你。', sid: preset.sid);
+                } : null, child: const Text('试听')),
+                if (voiceSid == preset.sid)
+                  const Icon(Icons.check_circle, color: Color(0xFF8A70AD), size: 20)
+                else TextButton(onPressed: () {
+                  setState(() => voiceSid = preset.sid);
+                  _persistVoiceId();
+                  if (!voiceReady) {
+                    voice.init().then((ok) {
+                      if (mounted) setState(() => voiceReady = ok);
+                    });
+                  }
+                  refresh(() {});
+                }, child: const Text('使用')),
+              ]),
+            ),
+          Padding(padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+            child: Row(children: [
+              Expanded(child: Text('自定义编号（0-${voice.numSpeakers > 0 ? voice.numSpeakers - 1 : 803}）：',
+                style: const TextStyle(fontSize: 12))),
+              SizedBox(width: 74, child: TextField(
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(isDense: true, hintText: '如 200'),
+                onSubmitted: (value) {
+                  final sid = int.tryParse(value.trim());
+                  if (sid == null || sid < 0) return;
+                  setState(() => voiceSid = sid);
+                  _persistVoiceId();
+                  if (!voiceReady) {
+                    voice.init().then((ok) {
+                      if (mounted) setState(() => voiceReady = ok);
+                    });
+                  }
+                  refresh(() {});
+                })),
+            ])),
+          const Padding(padding: EdgeInsets.only(bottom: 10),
+            child: Text('命名仅供参考，实际听感因模型而异；试听满意再使用。',
+              style: TextStyle(fontSize: 11, color: Colors.black54))),
+        ])))));
   }
 
   // ---- Hands-free conversation loop (offline engine only) ----
@@ -237,6 +360,7 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
     recognizer.cancel();
     speaker.stop();
     offline.dispose();
+    voice.dispose();
     input.dispose();
     super.dispose();
   }
@@ -244,7 +368,11 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
     final c = profile;
     final name = widget.controller.character(widget.roleId)?.name ?? 'AI';
     if (c == null) return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    return Scaffold(appBar: AppBar(title: Text('和$name语音聊天')),
+    return Scaffold(appBar: AppBar(title: Text('和$name语音聊天'),
+      actions: [
+        IconButton(tooltip: '音色', onPressed: _voiceSheet,
+          icon: const Icon(Icons.record_voice_over_outlined)),
+      ]),
       body: LayoutBuilder(builder: (context, bounds) => Stack(children: [
         Container(decoration: const BoxDecoration(gradient: LinearGradient(
           colors: [Color(0xFFFFF4FA), Color(0xFFEDEAF9)],
@@ -292,7 +420,7 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
                     Expanded(child: Text(_convoLabel(),
                       style: const TextStyle(fontSize: 12, color: Color(0xFF776375)))),
                     if (convoState == 'speaking') TextButton.icon(
-                      onPressed: () => speaker.stop(),
+                      onPressed: () => _stopSpeaking(),
                       icon: const Icon(Icons.front_hand_outlined, size: 16),
                       label: const Text('打断')),
                   ],
@@ -306,7 +434,7 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
                 IconButton(onPressed: sending ? null : _send,
                   icon: const Icon(Icons.send_rounded)),
               ]),
-              TextButton.icon(onPressed: () => speaker.stop(),
+              TextButton.icon(onPressed: () => _stopSpeaking(),
                 icon: const Icon(Icons.volume_off_outlined), label: const Text('停止朗读')),
               const Text('按轮或连续对话 · 不是实时视频或口型同步。连续对话用本机离线引擎自动断句，思考时调用原模型可能联网。',
                 style: TextStyle(fontSize: 10)),

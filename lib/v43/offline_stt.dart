@@ -20,6 +20,11 @@ class XyOfflineStt {
   sherpa_onnx.OnlineStream? _stream;
   final AudioRecorder _recorder = AudioRecorder();
   StreamSubscription<Uint8List>? _audioSub;
+  /// Last partial reported via onUpdate. Recognition reports the CUMULATIVE
+  /// text on every audio chunk (also while silent after an endpoint), so we
+  /// only fire onUpdate when the text actually GROWS — otherwise callers that
+  /// cancel their submit timer on every update would never submit.
+  String? _lastPartial;
 
   static const _sampleRate = 16000;
   // icefall-asr-zipformer-streaming-wenetspeech-20230615 (int8 streaming).
@@ -80,6 +85,7 @@ class XyOfflineStt {
     await stop();
     _stream?.free();
     _stream = recognizer.createStream();
+    _lastPartial = null;
     const config = RecordConfig(
       encoder: AudioEncoder.pcm16bits,
       sampleRate: _sampleRate,
@@ -95,7 +101,10 @@ class XyOfflineStt {
         recognizer.decode(stream);
       }
       final text = recognizer.getResult(stream).text;
-      if (text.isNotEmpty) onUpdate(text);
+      if (text.isNotEmpty && text != _lastPartial) {
+        _lastPartial = text;
+        onUpdate(text);
+      }
       // No reset here: one utterance per turn; the caller stops and reads
       // the accumulated result itself.
       if (recognizer.isEndpoint(stream)) {

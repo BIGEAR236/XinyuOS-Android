@@ -100,6 +100,37 @@ jobs:
           fi
           ls -lh assets/sherpa/
           df -h /
+      - name: Fetch offline TTS voice model
+        run: |
+          # vits-zh-hf-theresa: 804 speakers, 22.05kHz, ~117MB. GitHub tar
+          # first; on failure fall back to per-file HuggingFace downloads.
+          set -e
+          mkdir -p assets/sherpa/tts
+          GH_TTS=https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-zh-hf-theresa.tar.bz2
+          if curl -fL --retry 2 --retry-delay 5 --connect-timeout 20 -o /tmp/tts.tar.bz2 "$GH_TTS" \
+             && tar -xjf /tmp/tts.tar.bz2 -C /tmp; then
+            cp /tmp/vits-zh-hf-theresa/theresa.onnx assets/sherpa/tts/
+            cp /tmp/vits-zh-hf-theresa/lexicon.txt assets/sherpa/tts/
+            cp /tmp/vits-zh-hf-theresa/tokens.txt assets/sherpa/tts/
+            cp /tmp/vits-zh-hf-theresa/phone.fst assets/sherpa/tts/
+            cp /tmp/vits-zh-hf-theresa/date.fst assets/sherpa/tts/
+            cp /tmp/vits-zh-hf-theresa/number.fst assets/sherpa/tts/
+            rm -f /tmp/tts.tar.bz2 && rm -rf /tmp/vits-zh-hf-theresa
+          else
+            echo "GitHub TTS tar failed; falling back to HuggingFace"
+            HF_TTS=https://huggingface.co/csukuangfj/vits-zh-hf-theresa/resolve/main
+            for F in theresa.onnx lexicon.txt tokens.txt phone.fst date.fst number.fst; do
+              curl -fL --retry 3 --retry-delay 5 -o "assets/sherpa/tts/$F" "$HF_TTS/$F"
+            done
+          fi
+          # jieba segmentation dict (required by vits-zh-hf models)
+          curl -fL --retry 3 --retry-delay 5 -o /tmp/dict.tar.bz2 \
+            https://github.com/csukuangfj/cppjieba/releases/download/sherpa-onnx-2024-04-19/dict.tar.bz2
+          tar -xjf /tmp/dict.tar.bz2 -C /tmp
+          cp -r /tmp/dict assets/sherpa/tts/dict
+          rm -f /tmp/dict.tar.bz2 && rm -rf /tmp/dict
+          du -sh assets/sherpa/tts
+          df -h /
       - name: Install dependencies
         run: flutter pub get
       - name: Check Flutter and Dart
@@ -128,7 +159,7 @@ jobs:
       - name: Publish APK to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v4.5.0-b${{ github.run_number }}
-          name: 小雨机 4.5.0 构建 ${{ github.run_number }}
-          body: 正式签名 APK（小雨机 V4.5.0：连续对话免按钮模式+打断；数字人照片说话时嘴部律动、头部轻摆）。覆盖安装即可（不要卸载）。对应提交 ${{ github.sha }}。
+          tag_name: v4.6.0-b${{ github.run_number }}
+          name: 小雨机 4.6.0 构建 ${{ github.run_number }}
+          body: 正式签名 APK（小雨机 V4.6.0：内置 804 音色离线音色库，可试听选择按角色保存；修复连续对话停顿不识别；语音播报只读对话内容）。APK 约 240MB，覆盖安装即可（不要卸载）。对应提交 ${{ github.sha }}。
           files: build/app/outputs/flutter-apk/app-release.apk
