@@ -51,16 +51,28 @@ jobs:
       - name: Fetch offline speech recognition model
         run: |
           # icefall-asr-zipformer-streaming-wenetspeech-20230615 (int8 streaming, zh)
+          # Primary: GitHub release tar. Fallback: per-file HuggingFace mirror
+          # of the same model (same files, same layout). -f never saves an
+          # HTTP error page as the archive.
+          set -e
           mkdir -p assets/sherpa
-          curl -L --retry 3 --retry-delay 5 -o /tmp/asr.tar.bz2 \
-            https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/icefall-asr-zipformer-streaming-wenetspeech-20230615.tar.bz2
-          tar -xjf /tmp/asr.tar.bz2 -C /tmp
-          cp /tmp/icefall-asr-zipformer-streaming-wenetspeech-20230615/exp/encoder-epoch-12-avg-4-chunk-16-left-128.int8.onnx assets/sherpa/
-          cp /tmp/icefall-asr-zipformer-streaming-wenetspeech-20230615/exp/decoder-epoch-12-avg-4-chunk-16-left-128.onnx assets/sherpa/
-          cp /tmp/icefall-asr-zipformer-streaming-wenetspeech-20230615/exp/joiner-epoch-12-avg-4-chunk-16-left-128.onnx assets/sherpa/
-          cp /tmp/icefall-asr-zipformer-streaming-wenetspeech-20230615/data/lang_char/tokens.txt assets/sherpa/
-          rm -f /tmp/asr.tar.bz2
-          rm -rf /tmp/icefall-asr-zipformer-streaming-wenetspeech-20230615
+          GH_TAR=https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/icefall-asr-zipformer-streaming-wenetspeech-20230615.tar.bz2
+          HF_BASE=https://huggingface.co/pkufool/icefall-asr-zipformer-streaming-wenetspeech-20230615/resolve/main
+          if curl -fL --retry 2 --retry-delay 5 --connect-timeout 20 -o /tmp/asr.tar.bz2 "$GH_TAR" \
+             && tar -xjf /tmp/asr.tar.bz2 -C /tmp; then
+            cp /tmp/icefall-asr-zipformer-streaming-wenetspeech-20230615/exp/encoder-epoch-12-avg-4-chunk-16-left-128.int8.onnx assets/sherpa/
+            cp /tmp/icefall-asr-zipformer-streaming-wenetspeech-20230615/exp/decoder-epoch-12-avg-4-chunk-16-left-128.onnx assets/sherpa/
+            cp /tmp/icefall-asr-zipformer-streaming-wenetspeech-20230615/exp/joiner-epoch-12-avg-4-chunk-16-left-128.onnx assets/sherpa/
+            cp /tmp/icefall-asr-zipformer-streaming-wenetspeech-20230615/data/lang_char/tokens.txt assets/sherpa/
+            rm -f /tmp/asr.tar.bz2
+            rm -rf /tmp/icefall-asr-zipformer-streaming-wenetspeech-20230615
+          else
+            echo "GitHub release download failed; falling back to HuggingFace"
+            curl -fL --retry 3 --retry-delay 5 -o assets/sherpa/encoder-epoch-12-avg-4-chunk-16-left-128.int8.onnx "$HF_BASE/exp/encoder-epoch-12-avg-4-chunk-16-left-128.int8.onnx"
+            curl -fL --retry 3 --retry-delay 5 -o assets/sherpa/decoder-epoch-12-avg-4-chunk-16-left-128.onnx "$HF_BASE/exp/decoder-epoch-12-avg-4-chunk-16-left-128.onnx"
+            curl -fL --retry 3 --retry-delay 5 -o assets/sherpa/joiner-epoch-12-avg-4-chunk-16-left-128.onnx "$HF_BASE/exp/joiner-epoch-12-avg-4-chunk-16-left-128.onnx"
+            curl -fL --retry 3 --retry-delay 5 -o assets/sherpa/tokens.txt "$HF_BASE/data/lang_char/tokens.txt"
+          fi
           ls -lh assets/sherpa/
           df -h /
       - name: Install dependencies
