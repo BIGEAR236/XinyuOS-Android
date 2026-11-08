@@ -108,15 +108,14 @@ class PetState {
   /// while still an egg (hatch pacing). A hatched pet may be cared for
   /// anytime; the local clock is best-effort without a server.
   String act(String action, DateTime now) {
-    if (!isHatched) {
-      if (!canInteract(now)) {
-        final left = remainingCooldown(now);
-        final minutes = (left.inMinutes + (left.inSeconds % 60 > 0 ? 1 : 0));
-        return '孵化期每小时只能进行一次有效陪伴，再等约 $minutes 分钟。孵化后就能随时和它玩啦。可以自由聊天和画蛋壳。';
-      }
-    } else {
-      lastInteractionAt = now.millisecondsSinceEpoch; // Recorded, never gates play.
+    if (!isHatched && !canInteract(now)) {
+      final left = remainingCooldown(now);
+      final minutes = (left.inMinutes + (left.inSeconds % 60 > 0 ? 1 : 0));
+      return '孵化期每小时只能进行一次有效陪伴，再等约 $minutes 分钟。孵化后就能随时和它玩啦。可以自由聊天和画蛋壳。';
     }
+    // Recorded for BOTH stages: the egg needs it for its hourly gate,
+    // the hatched pet just keeps a trail (never blocks play).
+    lastInteractionAt = now.millisecondsSinceEpoch;
     decay(now);
     interactionCount++;
     if (!isHatched) {
