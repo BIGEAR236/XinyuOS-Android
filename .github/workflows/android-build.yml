@@ -37,6 +37,15 @@ jobs:
           cache: true
       - name: Generate native Android project
         run: flutter create --platforms=android --project-name=xinyu_os --org=com.xinyuos .
+      - name: Point Gradle wrapper at the official distribution server
+        # Newer Flutter templates fetch Gradle from a GitHub release asset,
+        # which has been unreliable (504). services.gradle.org is the same
+        # zip on Gradle's own CDN; only the host part of the URL changes.
+        run: |
+          WRAP=android/gradle/wrapper/gradle-wrapper.properties
+          sed -i 's|github.com/gradle/gradle-distributions/releases/download/v[0-9.]*/gradle-|services.gradle.org/distributions/gradle-|' "$WRAP"
+          grep distributionUrl "$WRAP" || true
+          grep -q 'services.gradle.org' "$WRAP" || { echo "wrapper URL not rewritten"; cat "$WRAP"; exit 1; }
       - name: Apply Android permissions and disable backup
         run: |
           python3 tools/prepare_platforms.py
