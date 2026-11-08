@@ -3,6 +3,7 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:speech_to_text/speech_to_text.dart' as speech;
 import '../app_controller.dart';
 import '../v42/animated_portrait.dart';
+import '../v43/offline_stt.dart';
 import 'avatar_core.dart';
 
 /// Turn-based phone speech recognition -> original role LLM -> phone TTS.
@@ -24,6 +25,10 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
   bool talking = false;
   String status = '正在准备语音功能';
   String reply = '';
+  /// 'system' uses the Android RecognitionService; 'offline' falls back to
+  /// the bundled sherpa-onnx engine for ROMs without any system service.
+  String engine = 'system';
+  final XyOfflineStt offline = XyOfflineStt();
   @override void initState() {
     super.initState();
     _init();
@@ -35,13 +40,25 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
     final p = await DigitalPersonStore.load(widget.roleId);
     // Android STT and system TTS are independent services.
     // Missing STT must not prevent text sending or speech playback.
+    var systemOk = false;
     try {
-      available = await recognizer.initialize();
-      status = available ? '点击麦克风，说完后发送' :
-        '本机没有可用的系统语音识别服务。可以继续输入文字。';
-    } catch (_) {
-      available = false;
-      status = '本机没有可用的系统语音识别服务。可以继续输入文字。';
+      systemOk = await recognizer.initialize();
+    } catch (_) { systemOk = false; }
+    if (systemOk) {
+      engine = 'system';
+      available = true;
+      status = '点击麦克风，说完后发送';
+    } else {
+      // Most domestic ROMs ship no RecognitionService; use the bundled
+      // offline engine instead (first load copies ~60MB out of the APK).
+      status = '系统识别服务不可用，正在启动本机离线引擎…';
+      if (mounted) setState(() {});
+      final offlineOk = await offline.init();
+      engine = offlineOk ? 'offline' : 'none';
+      available = offlineOk;
+      status = offlineOk
+        ? '点击麦克风，说完后发送（本机离线识别，无需联网）'
+        : '本机没有可用的系统语音识别服务，且离线引擎未能启动。可以继续输入文字。';
     }
     try {
       await speaker.setLanguage('zh-CN');
@@ -53,13 +70,12 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
     showDialog<void>(context: context, builder: (ctx) => AlertDialog(
       title: const Text('无法使用语音识别'),
       content: const SingleChildScrollView(child: Text(
-        '此功能使用手机的 Android 系统语音识别，并不依赖聊天大模型 API。\n\n'
-        '你可以先检查：\n'
+        '语音识别优先使用手机系统服务；不可用时自动切换本机离线引擎（首次使用需从安装包释放模型，稍等几秒）。两者都不用时，可检查：\n'
         '1. 在手机设置中允许「小雨机」使用麦克风；\n'
-        '2. 检查是否安装、启用了系统语音识别服务（例如 Google 语音识别与合成，或手机厂商自带服务）；\n'
+        '2. 检查是否安装、启用了系统语音识别服务（例如 Google 语音识别，或手机厂商自带服务）；\n'
         '3. 在语言与输入法／语音输入设置中选择可用服务；\n'
-        '4. 如果仍报错，检查新 APK 的 AndroidManifest.xml 是否包含 RecognitionService 的 <queries> 声明。\n\n'
-        '没有该服务时，仍可发送文字并由原聊天模型回复。')),
+        '4. 离线引擎随安装包提供，不联网；若它也未能启动，可能是安装包不含模型或设备内存不足。\n\n'
+        '没有语音时，仍可发送文字并由原聊天模型回复。')),
       actions: [
         TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('关闭')),
         FilledButton(onPressed: () { Navigator.pop(ctx); _init(); },
@@ -73,6 +89,10 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
   }
   Future<void> _mic() async {
     if (sending || !available || profile?.enabled != true) return;
+    if (engine == 'offline') {
+      await _micOffline();
+      return;
+    }
     try {
       if (listening) {
         await recognizer.stop();
@@ -84,6 +104,26 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
           setState(() { input.text = result.recognizedWords; });
         }, localeId: 'zh_CN');
         if (mounted) setState(() { listening = true; status = '正在听你说话…'; });
+      }
+    } catch (e) { _toast(e); if (mounted) setState(() => listening = false); }
+  }
+  Future<void> _micOffline() async {
+    try {
+      if (listening) {
+        final text = await offline.stop();
+        if (!mounted) return;
+        setState(() {
+          listening = false;
+          if (text.isNotEmpty) input.text = text;
+          status = '识别完成，可检查文字后发送';
+        });
+      } else {
+        await speaker.stop();
+        await offline.start((partial) {
+          if (!mounted) return;
+          setState(() => input.text = partial);
+        });
+        if (mounted) setState(() { listening = true; status = '正在听你说话（离线）…'; });
       }
     } catch (e) { _toast(e); if (mounted) setState(() => listening = false); }
   }
@@ -115,6 +155,7 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
   @override void dispose() {
     recognizer.cancel();
     speaker.stop();
+    offline.dispose();
     input.dispose();
     super.dispose();
   }
@@ -154,7 +195,7 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
                 onChanged: (v) => setState(() => c.scale = v),
                 onChangeEnd: (_) => DigitalPersonStore.save(c)),
               Row(children: [
-                IconButton(onPressed: sending || (!available && !listening) ? null : _mic,
+                IconButton(onPressed: sending || !available ? null : _mic,
                   icon: Icon(listening ? Icons.stop_circle : Icons.mic_none_rounded),
                   tooltip: listening ? '结束识别' : '开始说话'),
                 Expanded(child: TextField(controller: input, maxLines: 2,
@@ -164,7 +205,7 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
               ]),
               TextButton.icon(onPressed: () => speaker.stop(),
                 icon: const Icon(Icons.volume_off_outlined), label: const Text('停止朗读')),
-              const Text('按轮对话 · 不是实时视频或口型同步。系统语音识别可能联网。',
+              const Text('按轮对话 · 不是实时视频或口型同步。系统服务或本机离线引擎识别；离线模式不联网。',
                 style: TextStyle(fontSize: 10)),
             ]))))),
       ])));

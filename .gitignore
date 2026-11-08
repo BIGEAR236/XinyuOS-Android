@@ -21,3 +21,6 @@ android/key.properties
 *.p12
 *.mobileprovision
 .env
+# Offline ASR models are fetched by CI into assets/sherpa/ (never commit).
+assets/sherpa/*
+!assets/sherpa/.gitkeep

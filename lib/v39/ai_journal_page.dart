@@ -91,7 +91,7 @@ class _AiJournalPageState extends State<AiJournalPage> {
   Widget build(BuildContext context) {
     final c = widget.controller.character(widget.roleId);
     return Scaffold(
-      appBar: embedded ? null : AppBar(title: Text('${c?.name ?? '角色'} · AI 日记备忘录')),
+      appBar: widget.embedded ? null : AppBar(title: Text('${c?.name ?? '角色'} · AI 日记备忘录')),
       body: ListView(padding: const EdgeInsets.all(16), children: [
         const Text('由 AI 根据聊天生成，所有条目需你确认后才会保存。',
           style: TextStyle(color: Colors.black54)),

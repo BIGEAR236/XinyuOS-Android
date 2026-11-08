@@ -1,0 +1,2 @@
+# Placeholder so the asset directory exists in local checkouts.
+# CI downloads the real model files here during the release build.

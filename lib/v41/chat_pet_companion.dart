@@ -30,8 +30,10 @@ class _XyChatPetCompanionState extends State<XyChatPetCompanion> {
     final pos=await prefs.getStringList(posKey);
     if(pos!=null&&pos.length==2){x=double.tryParse(pos[0])??x;y=double.tryParse(pos[1])??y;}
     final h=await prefs.getBool(hiddenKey)??false;
-    if(mounted)setState(()=>pet=state..?decay(DateTime.now()));
-    if(mounted)setState(()=>hidden=h);
+    state.decay(DateTime.now());
+    if(!mounted)return;
+    setState(()=>pet=state);
+    setState(()=>hidden=h);
   }
   Future<void> _savePosition()=>prefs.setStringList(posKey,[x.toString(),y.toString()]);
   Future<void> _care(String action,{String? emoji,String? face}) async {
