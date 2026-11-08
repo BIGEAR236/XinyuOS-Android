@@ -18,6 +18,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
+      - name: Free disk space
+        # ubuntu runners ship ~14GB free; sherpa_onnx pulls native libs for
+        # every platform, so drop preinstalled toolchains we never use.
+        run: |
+          sudo rm -rf /usr/local/lib/android/sdk/ndk \
+            /usr/local/lib/android/sdk/emulator \
+            /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/local/swift
+          sudo docker image prune -af >/dev/null 2>&1 || true
+          df -h /
       - name: Checkout project
         uses: actions/checkout@v4
       - name: Install Flutter
@@ -49,7 +59,10 @@ jobs:
           cp /tmp/icefall-asr-zipformer-streaming-wenetspeech-20230615/exp/decoder-epoch-12-avg-4-chunk-16-left-128.onnx assets/sherpa/
           cp /tmp/icefall-asr-zipformer-streaming-wenetspeech-20230615/exp/joiner-epoch-12-avg-4-chunk-16-left-128.onnx assets/sherpa/
           cp /tmp/icefall-asr-zipformer-streaming-wenetspeech-20230615/data/lang_char/tokens.txt assets/sherpa/
+          rm -f /tmp/asr.tar.bz2
+          rm -rf /tmp/icefall-asr-zipformer-streaming-wenetspeech-20230615
           ls -lh assets/sherpa/
+          df -h /
       - name: Install dependencies
         run: flutter pub get
       - name: Check Flutter and Dart
@@ -57,7 +70,9 @@ jobs:
           flutter analyze --no-fatal-infos --no-fatal-warnings
           flutter test
       - name: Build real release APK
-        run: flutter build apk --release
+        # arm64-only: real phones since 2018 are all arm64; skipping the
+        # other ABIs halves the native-lib intermediates (disk) and the APK.
+        run: flutter build apk --release --target-platform android-arm64
       - name: Verify resulting package
         run: |
           test -s build/app/outputs/flutter-apk/app-release.apk
@@ -78,5 +93,5 @@ jobs:
         with:
           tag_name: v4.4.0-b${{ github.run_number }}
           name: 小雨机 4.4.0 构建 ${{ github.run_number }}
-          body: 正式签名 APK（小雨机 V4.4.0：语音识别新增本机离线引擎兑底，无系统语音服务的手机也能用）。APK 变大约 130MB，覆盖安装即可（不要卸载）。对应提交 ${{ github.sha }}。
+          body: 正式签名 APK（小雨机 V4.4.0：语音识别新增本机离线引擎兑底，无系统语音服务的手机也能用）。arm64 版约 90MB，覆盖安装即可（不要卸载）。对应提交 ${{ github.sha }}。
           files: build/app/outputs/flutter-apk/app-release.apk
