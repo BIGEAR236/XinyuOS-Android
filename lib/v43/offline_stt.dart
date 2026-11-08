@@ -87,7 +87,7 @@ class XyOfflineStt {
     _audioSub = audio.listen((data) {
       final stream = _stream;
       if (stream == null) return;
-      recognizer.acceptWaveform(stream,
+      stream.acceptWaveform(
           samples: _bytesToFloat32(data), sampleRate: _sampleRate);
       while (recognizer.isReady(stream)) {
         recognizer.decode(stream);
