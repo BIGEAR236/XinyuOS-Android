@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:speech_to_text/speech_to_text.dart' as speech;
@@ -29,12 +31,26 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
   /// the bundled sherpa-onnx engine for ROMs without any system service.
   String engine = 'system';
   final XyOfflineStt offline = XyOfflineStt();
+  /// Hands-free conversation loop: listen -> (endpoint) -> send -> TTS ->
+  /// listen again. Only with the offline engine (native endpoint detection).
+  bool convo = false;
+  String convoState = ''; // '' | 'listening' | 'thinking' | 'speaking'
+  Timer? _convoDebounce;
   @override void initState() {
     super.initState();
     _init();
     speaker.setStartHandler(() { if (mounted) setState(() => talking = true); });
-    speaker.setCompletionHandler(() { if (mounted) setState(() => talking = false); });
-    speaker.setErrorHandler((_) { if (mounted) setState(() => talking = false); });
+    speaker.setCompletionHandler(() {
+      if (!mounted) return;
+      setState(() => talking = false);
+      // Hands-free loop: resume listening right after the reply finished.
+      if (convo && convoState == 'speaking') _convoListen();
+    });
+    speaker.setErrorHandler((_) {
+      if (!mounted) return;
+      setState(() => talking = false);
+      if (convo && convoState == 'speaking') _convoListen();
+    });
   }
   Future<void> _init() async {
     final p = await DigitalPersonStore.load(widget.roleId);
@@ -127,8 +143,8 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
       }
     } catch (e) { _toast(e); if (mounted) setState(() => listening = false); }
   }
-  Future<void> _send() async {
-    final text = input.text.trim();
+  Future<void> _send([String? override]) async {
+    final text = (override ?? input.text).trim();
     if (text.isEmpty || sending || profile?.enabled != true) return;
     final role = widget.controller.character(widget.roleId);
     if (role == null) return;
@@ -147,12 +163,77 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
       if (!mounted) return;
       setState(() { reply = answer; input.clear(); status = '已收到回复'; });
       if (answer.isNotEmpty) {
+        if (convo) setState(() => convoState = 'speaking');
         await speaker.speak(answer.length > 900 ? answer.substring(0, 900) : answer);
+      } else if (convo) {
+        _convoListen(); // Empty reply: skip TTS and keep listening.
       }
-    } catch (e) { _toast(e); if (mounted) setState(() => status = '发送失败，请检查原模型配置'); }
+    } catch (e) {
+      _toast(e);
+      if (mounted) setState(() => status = '发送失败，请检查原模型配置');
+      if (convo && mounted) _convoListen(); // Let the user retry by voice.
+    }
     finally { if (mounted) setState(() => sending = false); }
   }
+
+  // ---- Hands-free conversation loop (offline engine only) ----
+  Future<void> _toggleConvo() async {
+    if (convo) { _stopConvo(); return; }
+    if (engine != 'offline') {
+      _toast('连续对话需要本机离线引擎（系统服务不支持自动断句）');
+      return;
+    }
+    if (profile?.enabled != true) { _toast('请先开启数字人'); return; }
+    setState(() => convo = true);
+    await _convoListen();
+  }
+  void _stopConvo() {
+    _convoDebounce?.cancel();
+    unawaited(offline.stop());
+    if (!mounted) return;
+    setState(() { convo = false; convoState = ''; listening = false;
+      status = '连续对话已结束'; });
+  }
+  Future<void> _convoListen() async {
+    if (!convo || !mounted) return;
+    _convoDebounce?.cancel();
+    _convoDebounce = null;
+    setState(() { convoState = 'listening'; listening = true;
+      status = '连续对话：在听你说…（说完自动发送）'; });
+    try {
+      await offline.start((partial) {
+        if (!mounted || !convo) return;
+        // Still speaking: drop the pending auto-submit; the next endpoint
+        // after this new speech schedules a fresh one.
+        _convoDebounce?.cancel();
+        _convoDebounce = null;
+        setState(() => input.text = partial);
+      }, onEndpoint: () {
+        // isEndpoint stays true for every silent audio chunk, so schedule
+        // exactly once (??=) and let it fire 650ms after the FIRST endpoint.
+        _convoDebounce ??= Timer(const Duration(milliseconds: 650), _convoSubmit);
+      });
+    } catch (e) {
+      _toast(e);
+      if (mounted) _stopConvo();
+    }
+  }
+  Future<void> _convoSubmit() async {
+    if (!convo || convoState != 'listening') return;
+    final text = await offline.stop();
+    if (!mounted || !convo) return;
+    if (text.trim().isEmpty) { await _convoListen(); return; }
+    setState(() { convoState = 'thinking'; listening = false; });
+    await _send(text);
+  }
+  String _convoLabel() => switch (convoState) {
+    'listening' => '● 在听你说…说完停顿即自动发送',
+    'thinking' => '… 思考中，正在联系原聊天模型',
+    'speaking' => '◉ 正在回复，可点打断',
+    _ => '',
+  };
   @override void dispose() {
+    _convoDebounce?.cancel();
     recognizer.cancel();
     speaker.stop();
     offline.dispose();
@@ -194,8 +275,30 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
               Slider(min: .5, max: 1.8, value: c.scale.clamp(.5, 1.8).toDouble(),
                 onChanged: (v) => setState(() => c.scale = v),
                 onChangeEnd: (_) => DigitalPersonStore.save(c)),
+              if (available && engine == 'offline') Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Row(children: [
+                  FilledButton.tonal(
+                    onPressed: sending ? null : _toggleConvo,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: convo ? const Color(0xFFF3D9E8) : null),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(convo ? Icons.stop_circle_outlined : Icons.all_inclusive, size: 18),
+                      const SizedBox(width: 4),
+                      Text(convo ? '结束' : '连续对话'),
+                    ])),
+                  if (convo) ...[
+                    const SizedBox(width: 8),
+                    Expanded(child: Text(_convoLabel(),
+                      style: const TextStyle(fontSize: 12, color: Color(0xFF776375)))),
+                    if (convoState == 'speaking') TextButton.icon(
+                      onPressed: () => speaker.stop(),
+                      icon: const Icon(Icons.front_hand_outlined, size: 16),
+                      label: const Text('打断')),
+                  ],
+                ])),
               Row(children: [
-                IconButton(onPressed: sending || !available ? null : _mic,
+                IconButton(onPressed: sending || !available || convo ? null : _mic,
                   icon: Icon(listening ? Icons.stop_circle : Icons.mic_none_rounded),
                   tooltip: listening ? '结束识别' : '开始说话'),
                 Expanded(child: TextField(controller: input, maxLines: 2,
@@ -205,7 +308,7 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
               ]),
               TextButton.icon(onPressed: () => speaker.stop(),
                 icon: const Icon(Icons.volume_off_outlined), label: const Text('停止朗读')),
-              const Text('按轮对话 · 不是实时视频或口型同步。系统服务或本机离线引擎识别；离线模式不联网。',
+              const Text('按轮或连续对话 · 不是实时视频或口型同步。连续对话用本机离线引擎自动断句，思考时调用原模型可能联网。',
                 style: TextStyle(fontSize: 10)),
             ]))))),
       ])));

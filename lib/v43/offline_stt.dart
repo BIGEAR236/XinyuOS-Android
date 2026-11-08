@@ -67,9 +67,11 @@ class XyOfflineStt {
     }
   }
 
-  /// Starts streaming recognition; [onUpdate] fires with the growing text.
-  /// Throws when microphone permission is denied.
-  Future<void> start(void Function(String text) onUpdate) async {
+  /// Starts streaming recognition; [onUpdate] fires with the growing text
+  /// and [onEndpoint] fires when the engine detects the speaker paused
+  /// (end of an utterance). Throws when microphone permission is denied.
+  Future<void> start(void Function(String text) onUpdate,
+      {void Function()? onEndpoint}) async {
     final recognizer = _recognizer;
     if (recognizer == null) return;
     if (!await _recorder.hasPermission()) {
@@ -94,8 +96,10 @@ class XyOfflineStt {
       }
       final text = recognizer.getResult(stream).text;
       if (text.isNotEmpty) onUpdate(text);
+      // No reset here: one utterance per turn; the caller stops and reads
+      // the accumulated result itself.
       if (recognizer.isEndpoint(stream)) {
-        recognizer.reset(stream);
+        onEndpoint?.call();
       }
     });
   }
