@@ -159,7 +159,7 @@ jobs:
       - name: Publish APK to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v4.6.0-b${{ github.run_number }}
-          name: 小雨机 4.6.0 构建 ${{ github.run_number }}
-          body: 正式签名 APK（小雨机 V4.6.0：内置 804 音色离线音色库，可试听选择按角色保存；修复连续对话停顿不识别；语音播报只读对话内容）。APK 约 240MB，覆盖安装即可（不要卸载）。对应提交 ${{ github.sha }}。
+          tag_name: v4.7.1-b${{ github.run_number }}
+          name: 小雨机 4.7.1 构建 ${{ github.run_number }}
+          body: 正式签名 APK（小雨机 V4.7.1：安卓启动器图标换为你提供的形象图；含分角色“我”头像、图标实时预览、804 音色库与连续对话修复）。APK 约 240MB，覆盖安装即可（不要卸载）。对应提交 ${{ github.sha }}。
           files: build/app/outputs/flutter-apk/app-release.apk

@@ -95,6 +95,14 @@ if manifest.exists():
             print('✓ Gradle 仓库已前置阿里云镜像（直供构件，避开 GitHub 重定向）。')
         else:
             print('✓ Gradle 仓库镜像已配置。')
+    icons = root / 'android_icons'
+    res = root / 'android/app/src/main/res'
+    if icons.is_dir() and res.is_dir():
+        import shutil
+        for item in icons.iterdir():
+            if item.is_dir():
+                shutil.copytree(item, res / item.name, dirs_exist_ok=True)
+        print('✓ 已应用自定义安卓启动器图标（adaptive + legacy）。')
     print('✓ Android 已设置 HTTPS 网络权限、麦克风权限、语音服务可见性（queries）和应用显示名。')
 else:
     print('! Android 工程不存在：请先运行 flutter create --platforms=android,ios .')

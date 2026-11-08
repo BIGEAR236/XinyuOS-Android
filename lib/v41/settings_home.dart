@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
@@ -34,6 +36,18 @@ class XyIconSettings extends StatelessWidget {
   const XyIconSettings({super.key,required this.controller});
   static const labels={'chat':'心屿通讯','api':'API 连接','music':'本地音乐',
     'video':'本地视频','settings':'设置','memo':'备忘录','diary':'日记','album':'数字人图库'};
+  /// Same defaults the desktop tiles use, so the preview here matches the
+  /// real home screen.
+  static const _defaults = <String, (IconData, Color)>{
+    'chat': (Icons.chat_bubble_rounded, Color(0xFF90BDAE)),
+    'api': (Icons.hub_rounded, Color(0xFF9AABDC)),
+    'music': (Icons.music_note_rounded, Color(0xFFD49CB3)),
+    'video': (Icons.play_circle_rounded, Color(0xFFB1A5D5)),
+    'album': (Icons.face_3_rounded, Color(0xFFD6A9BE)),
+    'memo': (Icons.note_alt_rounded, Color(0xFFE4BC92)),
+    'diary': (Icons.auto_stories_rounded, Color(0xFFC59FC3)),
+    'settings': (Icons.settings_rounded, Color(0xFF8E99AB)),
+  };
   Future<void> _import(BuildContext context,String id) async {
     try{
       final file=await FilePicker.pickFile(type:FileType.image);
@@ -56,11 +70,23 @@ class XyIconSettings extends StatelessWidget {
           subtitle:const Text('桌面可以长按拖到空位或与其他图标交换'),
           onTap:()=>XyDesktopSlots.reset()),
         const Divider(),
-        const Padding(padding:EdgeInsets.all(16),child:Text('图标图片 · 点击选择相册中的自定义图片')),
+        const Padding(padding:EdgeInsets.all(16),child:Text('图标图片 · 点击选择相册中的自定义图片；左侧为当前实际图标')),
         for(final id in XyDesktopSlots.visible)
-          ListTile(title:Text(labels[id]??id),leading:const Icon(Icons.apps_rounded),
-            trailing:IconButton(tooltip:'恢复系统图标',onPressed:()=>controller.clearDesktopIcon(id),
-              icon:const Icon(Icons.restore_rounded)),onTap:()=>_import(context,id)),
+          Builder(builder:(context){
+            final preset=_defaults[id] ?? (Icons.apps_rounded, const Color(0xFF8E99AB));
+            final custom=controller.data.desktopIcons[id];
+            final file=(custom!=null&&custom.isNotEmpty)?
+              controller.local.resolve(custom):null;
+            final customized=file!=null&&file.existsSync();
+            return ListTile(title:Text(labels[id]??id),
+              subtitle:Text(customized?'已自定义 · 点击更换':'默认图标 · 点击设置图片'),
+              leading:customized
+                ?CircleAvatar(radius:26,backgroundImage:FileImage(file!))
+                :CircleAvatar(radius:26,backgroundColor:preset.$2.withValues(alpha:.18),
+                  child:Icon(preset.$1,color:preset.$2)),
+              trailing:IconButton(tooltip:'恢复系统图标',onPressed:()=>controller.clearDesktopIcon(id),
+                icon:const Icon(Icons.restore_rounded)),onTap:()=>_import(context,id));
+          })
       ])));
 }
 class XyThemeSettings extends StatelessWidget {

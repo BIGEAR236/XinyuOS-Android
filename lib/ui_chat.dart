@@ -289,6 +289,43 @@ class _ChatScreenState extends State<ChatScreen> {
       XyOwnedGiftPage(controller:widget.controller,roleId:friend.id)));
   }
 
+    /// Per-role avatar of the PLAYER inside this private chat: a different
+    /// "me" for different characters, falling back to the global avatar.
+    Future<void> _pickMyAvatarHere(Character c) async {
+      final current = widget.controller.data.meAvatarByRole[c.id];
+      final action = await showModalBottomSheet<String>(context: context,
+        builder: (sheet) => SafeArea(child: Column(mainAxisSize: MainAxisSize.min, children: [
+          ListTile(title: Text('我在「${c.name}」聊天中的形象'),
+            subtitle: Text(current == null
+              ? '当前使用全局总头像，仅在这个聊天可换专属形象'
+              : '已设置专属形象，只在这个聊天显示'),),
+          ListTile(leading: const Icon(Icons.photo_library_outlined),
+            title: const Text('从相册选择专属形象'),
+            onTap: () => Navigator.pop(sheet, 'pick')),
+          if (current != null)
+            ListTile(leading: const Icon(Icons.restore_rounded),
+              title: const Text('恢复使用总头像'),
+              onTap: () => Navigator.pop(sheet, 'clear')),
+        ])));
+      if (action == 'pick') {
+        try {
+          final file = await FilePicker.pickFile(type: FileType.image);
+          if (file == null) return;
+          final bytes = await file.length();
+          if (bytes != null && bytes > 8 * 1024 * 1024) {
+            if (mounted) uiError(context, '头像不能超过 8MB');
+            return;
+          }
+          final path = await widget.controller.local.copyIntoApp(file, 'me_avatar');
+          widget.controller.setMeAvatarForRole(c.id, path);
+        } catch (e) {
+          if (mounted) uiError(context, '$e');
+        }
+      } else if (action == 'clear') {
+        widget.controller.clearMeAvatarForRole(c.id);
+      }
+    }
+  
   Future<void> _pickImage() async {
     try {
       final file = await FilePicker.pickFile(type: FileType.image);
@@ -429,6 +466,8 @@ class _ChatScreenState extends State<ChatScreen> {
                   builder: (_) => CharacterDetailScreen(controller: widget.controller,
                     characterId: c.id)));
 
+              } else if (v == 'meavatar') {
+                await _pickMyAvatarHere(c);
               } else if (v == 'reset') {
                 if (await _confirm('清空当前会话',
                   '将删除这一段本地聊天记录，但角色设定仍会保留。此操作不可恢复。')) {
@@ -437,6 +476,7 @@ class _ChatScreenState extends State<ChatScreen> {
               }
             }, itemBuilder: (_) => const [
               PopupMenuItem(value: 'profile', child: Text('角色资料')),
+              PopupMenuItem(value: 'meavatar', child: Text('我在此聊天的形象')),
               PopupMenuItem(value: 'reset', child: Text('清空当前会话（重新开始）')),
             ], icon: const Icon(Icons.more_horiz)),
         ]),
@@ -458,6 +498,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   return ChatBubble(entry: ChatEntry(id: 'live', threadId: thread,
                     senderId: pending, text: partial, createdAt: DateTime.now()),
                     controller: widget.controller, groupChat: group != null,
+                    peerId: c?.id,
                     streaming: true);
                 }
                 return const Padding(padding: EdgeInsets.all(12), child: Row(children: [
@@ -468,7 +509,8 @@ class _ChatScreenState extends State<ChatScreen> {
               final offset = index - (running ? 1 : 0);
               final item = messages[messages.length - offset - 1];
               return ChatBubble(entry: item, controller: widget.controller,
-                groupChat: group != null, selected: _selected.contains(item.id),
+                groupChat: group != null, peerId: c?.id,
+                selected: _selected.contains(item.id),
                 selectionMode: _selecting,
                 onAction: _action, onEdit: _edit,
                 onRegenerate: widget.friend != null &&
@@ -522,6 +564,10 @@ class ChatBubble extends StatelessWidget {
   final ChatEntry entry;
   final AppController controller;
   final bool groupChat;
+  /// The character whose private chat this bubble belongs to; enables the
+  /// per-role avatar of the PLAYER (data.meAvatarByRole) with the global
+  /// myAvatarPath as fallback.
+  final String? peerId;
   final bool streaming;
   final bool selected;
   final bool selectionMode;
@@ -531,7 +577,7 @@ class ChatBubble extends StatelessWidget {
   final Future<void> Function()? onRegenerate;
   final Future<void> Function(ChatEntry)? onVersions;
   const ChatBubble({super.key, required this.entry, required this.controller,
-    this.groupChat = false, this.streaming = false, this.selected = false,
+    this.groupChat = false, this.peerId, this.streaming = false, this.selected = false,
     this.selectionMode = false, this.onAction, this.onTap,
     this.onEdit, this.onRegenerate, this.onVersions});
 
@@ -554,11 +600,16 @@ class ChatBubble extends StatelessWidget {
     final color = ThemeData.estimateBrightnessForColor(bubbleColor) == Brightness.light
       ? Colors.black87 : Colors.white;
     final avatar = mine
-      ? (controller.data.myAvatarPath.isNotEmpty &&
-          controller.local.resolve(controller.data.myAvatarPath).existsSync()
-          ? CircleAvatar(radius: 13, backgroundImage: FileImage(
-              controller.local.resolve(controller.data.myAvatarPath)))
-          : const CircleAvatar(radius: 13, child: Icon(Icons.person, size: 15)))
+      ? (() {
+          final perRole = peerId == null
+            ? null : controller.data.meAvatarByRole[peerId];
+          final path = perRole != null && perRole.isNotEmpty
+            ? perRole : controller.data.myAvatarPath;
+          return path.isNotEmpty && controller.local.resolve(path).existsSync()
+            ? CircleAvatar(radius: 13, backgroundImage: FileImage(
+                controller.local.resolve(path)))
+            : const CircleAvatar(radius: 13, child: Icon(Icons.person, size: 15));
+        })()
       : character == null ? const CircleAvatar(radius: 13,
           child: Icon(Icons.smart_toy_outlined, size: 15))
           : CharacterAvatar(character: character, local: controller.local, radius: 13);

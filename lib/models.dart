@@ -382,6 +382,9 @@ class AppData {
   String myAvatarPath;
   String fontPath;
   Map<String, String> desktopIcons;
+  /// Per-role avatar the PLAYER uses inside that character's private chat;
+  /// empty/fallback -> myAvatarPath (the global one from settings).
+  Map<String, String> meAvatarByRole;
   List<String> desktopOrder; // user-set icon position, preserved between launches
   bool autoMomentReplies; // only for user comments; defaults OFF
   bool autoMomentInteractions; // foreground only; defaults OFF
@@ -409,6 +412,7 @@ class AppData {
     this.notes = const [], this.albumPaths = const [],
     this.darkMode = false, this.themeColor = 0xFF8870B5, this.fontScale = 1,
     this.wallpaperPath = '', this.myAvatarPath = '', this.fontPath = '', this.desktopIcons = const {},
+        this.meAvatarByRole = const {},
     this.desktopOrder = defaultDesktopOrder,
     this.autoMomentReplies = false, this.autoMomentInteractions = false,
     this.lastAutoInteractionAt, this.chatBubbleOpacity = 1.0,
@@ -448,6 +452,7 @@ class AppData {
     wallpaperPath: '${j['wallpaperPath'] ?? ''}',
     myAvatarPath: '${j['myAvatarPath'] ?? ''}', fontPath: '${j['fontPath'] ?? ''}',
     desktopIcons: mapJson(j['desktopIcons']).map((k, v) => MapEntry(k, '$v')),
+        meAvatarByRole: mapJson(j['meAvatarByRole']).map((k, v) => MapEntry(k, '$v')),
     desktopOrder: normalizeDesktopOrder(j['desktopOrder']),
     autoMomentReplies: j['autoMomentReplies'] == true,
     autoMomentInteractions: j['autoMomentInteractions'] == true,
@@ -483,7 +488,7 @@ class AppData {
     'darkMode': darkMode, 'themeColor': themeColor,
     'fontScale': fontScale, 'wallpaperPath': wallpaperPath,
     'myAvatarPath': myAvatarPath, 'fontPath': fontPath,
-    'desktopIcons': desktopIcons, 'desktopOrder': desktopOrder,
+    'desktopIcons': desktopIcons, 'meAvatarByRole': meAvatarByRole, 'desktopOrder': desktopOrder,
     'autoMomentReplies': autoMomentReplies,
     'autoMomentInteractions': autoMomentInteractions,
     'lastAutoInteractionAt': lastAutoInteractionAt?.toIso8601String(),

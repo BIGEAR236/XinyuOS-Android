@@ -996,6 +996,18 @@ $context
     _changed();
   }
 
+  /// The player's own avatar shown inside [roleId]'s private chat; falls
+  /// back to the global myAvatarPath when unset.
+  void setMeAvatarForRole(String roleId, String relativePath) {
+    data.meAvatarByRole = {...data.meAvatarByRole, roleId: relativePath};
+    _changed();
+  }
+
+  void clearMeAvatarForRole(String roleId) {
+    data.meAvatarByRole = {...data.meAvatarByRole}..remove(roleId);
+    _changed();
+  }
+
   void _partial(String thread, String sender, String text) {
     partialReplies[thread] = text;
     partialSenders[thread] = sender;
