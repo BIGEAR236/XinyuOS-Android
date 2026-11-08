@@ -81,6 +81,20 @@ if manifest.exists():
                 if 'coreLibraryDesugaring ' not in source:
                     source += "\ndependencies {\n    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.4'\n}\n"
             gradle.write_text(source, encoding='utf-8')
+    settings = root / 'android/settings.gradle.kts'
+    if settings.exists():
+        text = settings.read_text('utf-8')
+        if 'maven.aliyun.com' not in text:
+            # Mirror FIRST: aliyun serves artifacts directly. Maven Central
+            # may redirect some large artifacts (e.g. kotlin-compiler-
+            # embeddable) to GitHub releases, which is unreliable.
+            mirror = ('        maven { url = uri("https://maven.aliyun.com/repository/public") }\n'
+                      '        maven { url = uri("https://maven.aliyun.com/repository/google") }\n')
+            text = text.replace('repositories {', 'repositories {\n' + mirror)
+            settings.write_text(text, encoding='utf-8')
+            print('✓ Gradle 仓库已前置阿里云镜像（直供构件，避开 GitHub 重定向）。')
+        else:
+            print('✓ Gradle 仓库镜像已配置。')
     print('✓ Android 已设置 HTTPS 网络权限、麦克风权限、语音服务可见性（queries）和应用显示名。')
 else:
     print('! Android 工程不存在：请先运行 flutter create --platforms=android,ios .')
