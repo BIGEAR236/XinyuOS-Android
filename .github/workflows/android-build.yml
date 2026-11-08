@@ -37,15 +37,31 @@ jobs:
           cache: true
       - name: Generate native Android project
         run: flutter create --platforms=android --project-name=xinyu_os --org=com.xinyuos .
-      - name: Point Gradle wrapper at the official distribution server
-        # Newer Flutter templates fetch Gradle from a GitHub release asset,
-        # which has been unreliable (504). services.gradle.org is the same
-        # zip on Gradle's own CDN; only the host part of the URL changes.
+      - name: Fetch Gradle locally and point the wrapper at the file
+        # Ultimate fix for flaky wrapper downloads: WE download Gradle with
+        # curl (official CDN -> Tencent mirror, with retries) and rewrite
+        # distributionUrl to a file:// URL, so the wrapper never touches
+        # GitHub (whose release CDN 504s) or any network at all.
         run: |
+          set -e
           WRAP=android/gradle/wrapper/gradle-wrapper.properties
-          sed -i 's|github.com/gradle/gradle-distributions/releases/download/v[0-9.]*/gradle-|services.gradle.org/distributions/gradle-|' "$WRAP"
-          grep distributionUrl "$WRAP" || true
-          grep -q 'services.gradle.org' "$WRAP" || { echo "wrapper URL not rewritten"; cat "$WRAP"; exit 1; }
+          VER=$(grep -oE 'gradle-[0-9]+\.[0-9]+(\.[0-9]+)?-(all|bin)\.zip' "$WRAP" | head -1 | sed 's/^gradle-//; s/\.zip$//')
+          echo "Detected Gradle: $VER"
+          test -n "$VER" || { echo 'no version found'; cat "$WRAP"; exit 1; }
+          ZIP=/tmp/gradle-$VER.zip
+          for URL in "https://services.gradle.org/distributions/gradle-$VER.zip" \
+                     "https://mirrors.cloud.tencent.com/gradle/gradle-$VER.zip"; do
+            echo "Trying $URL"
+            if curl -fL --retry 3 --retry-delay 3 --connect-timeout 20 -o "$ZIP" "$URL"; then
+              GOT=1; break
+            fi
+          done
+          test "$GOT" = 1 || { echo 'all Gradle mirrors failed'; exit 1; }
+          ls -lh "$ZIP"
+          sed -i "s|^distributionUrl=.*|distributionUrl=file://$ZIP|" "$WRAP"
+          echo '--- resulting wrapper config ---'
+          cat "$WRAP"
+          grep -q 'file:///tmp/gradle-' "$WRAP" || { echo 'rewrite failed'; exit 1; }
       - name: Apply Android permissions and disable backup
         run: |
           python3 tools/prepare_platforms.py
