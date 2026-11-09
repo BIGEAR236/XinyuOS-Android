@@ -7,8 +7,10 @@ import '../widgets/chat_overlay.dart';
 
 class GamesPage extends StatelessWidget {
   final CompanionController agent;
-  const GamesPage({super.key,required this.agent});
+  final VoidCallback? onVoiceCall;
+  const GamesPage({super.key,required this.agent,this.onVoiceCall});
   @override Widget build(BuildContext context) => CompanionScaffold(title:'和${agent.roleName}玩游戏',agent:agent,
+    onVoiceCall:onVoiceCall,
     child:ListView(padding:const EdgeInsets.all(16),children:[
       GameAiToggle(agent:agent),
       _game(context,'⚫','五子棋','15×15 棋盘 · AI 会阻挡四连并尝试连五',()=>GomokuPage(agent:agent)),

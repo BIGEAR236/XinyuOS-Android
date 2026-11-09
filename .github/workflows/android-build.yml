@@ -102,39 +102,25 @@ jobs:
           df -h /
       - name: Fetch offline TTS voice model
         run: |
-          # vits-zh-hf-theresa: 804 speakers, 22.05kHz, ~117MB. GitHub tar
-          # first; on failure fall back to per-file HuggingFace downloads.
+          # kokoro-int8-multi-lang-v1_1: 103 speakers (female 3-57, male
+          # 58-102, official sid map), int8 → fast on-device synthesis.
+          # Mirror prefix as fallback (public release asset).
           set -e
           mkdir -p assets/sherpa/tts
-          GH_TTS=https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-zh-hf-theresa.tar.bz2
-          if curl -fL --retry 2 --retry-delay 5 --connect-timeout 20 -o /tmp/tts.tar.bz2 "$GH_TTS" \
-             && tar -xjf /tmp/tts.tar.bz2 -C /tmp; then
-            cp /tmp/vits-zh-hf-theresa/theresa.onnx assets/sherpa/tts/
-            cp /tmp/vits-zh-hf-theresa/lexicon.txt assets/sherpa/tts/
-            cp /tmp/vits-zh-hf-theresa/tokens.txt assets/sherpa/tts/
-            cp /tmp/vits-zh-hf-theresa/phone.fst assets/sherpa/tts/
-            cp /tmp/vits-zh-hf-theresa/date.fst assets/sherpa/tts/
-            cp /tmp/vits-zh-hf-theresa/number.fst assets/sherpa/tts/
-            rm -f /tmp/tts.tar.bz2 && rm -rf /tmp/vits-zh-hf-theresa
-          else
-            echo "GitHub TTS tar failed; falling back to HuggingFace"
-            HF_TTS=https://huggingface.co/csukuangfj/vits-zh-hf-theresa/resolve/main
-            for F in theresa.onnx lexicon.txt tokens.txt phone.fst date.fst number.fst; do
-              curl -fL --retry 3 --retry-delay 5 -o "assets/sherpa/tts/$F" "$HF_TTS/$F"
-            done
-          fi
-          # jieba segmentation dict (required by vits-zh-hf models)
-          curl -fL --retry 3 --retry-delay 5 -o /tmp/dict.tar.bz2 \
-            https://github.com/csukuangfj/cppjieba/releases/download/sherpa-onnx-2024-04-19/dict.tar.bz2
-          tar -xjf /tmp/dict.tar.bz2 -C /tmp
-          cp -r /tmp/dict assets/sherpa/tts/dict
-          rm -f /tmp/dict.tar.bz2 && rm -rf /tmp/dict
-          # Flatten dict subdirectories (pos_dict etc.) so one pubspec asset
-          # entry covers everything; jieba only reads the flat dict files.
-          find assets/sherpa/tts/dict -mindepth 2 -type f -exec mv -n {} assets/sherpa/tts/dict/ \; 2>/dev/null || true
-          find assets/sherpa/tts/dict -mindepth 1 -type d -empty -delete || true
+          TAR=kokoro-int8-multi-lang-v1_1.tar.bz2
+          GH_TTS=https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/$TAR
+          for URL in "$GH_TTS" "https://ghfast.top/$GH_TTS"; do
+            if curl -fL --retry 2 --retry-delay 5 --connect-timeout 20 -o /tmp/tts.tar.bz2 "$URL" \
+               && tar -xjf /tmp/tts.tar.bz2 -C /tmp; then GOT=1; break; fi
+          done
+          test "$GOT" = 1 || { echo 'all TTS mirrors failed'; exit 1; }
+          DIR=$(find /tmp -maxdepth 1 -type d -name 'kokoro-int8-multi-lang-v1_1*' | head -1)
+          for F in model.int8.onnx voices.bin tokens.txt lexicon-us-en.txt lexicon-zh.txt phone-zh.fst date-zh.fst number-zh.fst; do
+            find "$DIR" -name "$F" -exec cp {} assets/sherpa/tts/ \;
+          done
+          rm -f /tmp/tts.tar.bz2 && rm -rf "$DIR"
+          ls -lh assets/sherpa/tts/
           du -sh assets/sherpa/tts
-          find assets/sherpa/tts -type d | sort
           df -h /
       - name: Install dependencies
         run: flutter pub get
@@ -164,7 +150,7 @@ jobs:
       - name: Publish APK to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v4.8.0-b${{ github.run_number }}
-          name: 小雨机 4.8.0 构建 ${{ github.run_number }}
-          body: 正式签名 APK（小雨机 V4.8.0：修复音色库未打进安装包的问题（assets 子目录声明）；语音回复改为“首句即说”流水线，大幅缩短响应等待）。覆盖安装即可（不要卸载）。对应提交 ${{ github.sha }}。
+          tag_name: v4.9.1-b${{ github.run_number }}
+          name: 小雨机 4.9.1 构建 ${{ github.run_number }}
+          body: 正式签名 APK（小雨机 V4.9.1：剧情播报只读引号对白；互动页右下角可拖动单按钮（聊天/音视频）；互动页聊天自动参考当前日常/剧情模式的对话与人格）。覆盖安装即可（不要卸载）。对应提交 ${{ github.sha }}。
           files: build/app/outputs/flutter-apk/app-release.apk

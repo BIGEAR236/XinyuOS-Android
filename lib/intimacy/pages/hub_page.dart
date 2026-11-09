@@ -43,24 +43,20 @@ class _CompanionHubState extends State<CompanionHub> {
   }
   @override void dispose(){agent.dispose();if(ownsMusic)music.dispose();super.dispose();}
   Widget? _activityPage(String kind) {
-    final page=switch(kind) {
-      'pet'=>PetPage(agent:agent),
-      'music'=>MusicPage(agent:agent,room:music),
-      'watch'=>WatchPage(agent:agent),
-      'game'=>GamesPage(agent:agent),
+    // Single draggable corner button now hosts BOTH chat and voice call;
+    // no second stacked FAB eating interaction space.
+    final VoidCallback? voiceCall = widget.appController == null ? null : () {
+      if (!mounted) return;
+      Navigator.push(context, MaterialPageRoute(builder: (_) =>
+        DigitalCallPage(controller: widget.appController!, roleId: widget.roleId)));
+    };
+    return switch(kind) {
+      'pet'=>PetPage(agent:agent,onVoiceCall:voiceCall),
+      'music'=>MusicPage(agent:agent,room:music,onVoiceCall:voiceCall),
+      'watch'=>WatchPage(agent:agent,onVoiceCall:voiceCall),
+      'game'=>GamesPage(agent:agent,onVoiceCall:voiceCall),
       _=>null,
     };
-    if(page==null)return null;
-    return Stack(children:[Positioned.fill(child:page),
-      if(widget.appController!=null)Positioned(bottom:100,right:15,
-        child:FloatingActionButton.small(
-          heroTag:'digital_voice_${widget.roleId}_$kind',
-          tooltip:'数字人语音交流',
-          backgroundColor:const Color(0xFFD6B9DF),
-          onPressed:()=>Navigator.push(context,MaterialPageRoute(builder:(_)=>
-            DigitalCallPage(controller:widget.appController!,roleId:widget.roleId))),
-          child:const Icon(Icons.record_voice_over_outlined))),
-    ]);
   }
   @override Widget build(BuildContext context)=>Scaffold(
     backgroundColor:const Color(0xFFFFFAFD),
@@ -71,7 +67,7 @@ class _CompanionHubState extends State<CompanionHub> {
         const SizedBox(height:7),
         Text('专属角色：${widget.roleName}  ·  各角色独立宠物存档',style:const TextStyle(fontSize:12,color:Color(0xFF826A80))),
         const SizedBox(height:10),
-        const Text('进入任一空间，右下角圆形按钮可展开聊天。游戏 AI 评论默认关闭，节省 API 费用。',style:TextStyle(fontSize:12)),
+        const Text('进入任一空间，右下角圆形按钮可拖动；点按后可选择文字聊天或音视频对话。游戏 AI 评论默认关闭，节省 API 费用。',style:TextStyle(fontSize:12)),
       ]))),
       const SizedBox(height:12),
       _item('🥚','一起养宠物','彩绘蛋壳 · 30种宠物 · 现实时间冷却 · 等级成长',()=>_activityPage('pet')!),

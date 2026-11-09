@@ -2,11 +2,14 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../core/companion.dart';
 
-/// A circular floating chat affordance. The chat room does not take any
-/// layout height while closed. Expanded content overlays only a small region.
+/// A single draggable circular affordance in the corner. Tapping it opens a
+/// menu: text chat with the character, or the voice/video call page. The
+/// chat room itself does not take any layout height while closed.
 class FloatingCompanionChat extends StatefulWidget {
   final CompanionController agent;
-  const FloatingCompanionChat({super.key, required this.agent});
+  /// Opens the digital voice/video call page; null hides that menu entry.
+  final VoidCallback? onVoiceCall;
+  const FloatingCompanionChat({super.key, required this.agent, this.onVoiceCall});
   @override
   State<FloatingCompanionChat> createState() => _FloatingCompanionChatState();
 }
@@ -14,6 +17,10 @@ class FloatingCompanionChat extends StatefulWidget {
 class _FloatingCompanionChatState extends State<FloatingCompanionChat> {
   final input = TextEditingController();
   bool open = false;
+  /// Offset from the default bottom-right anchor; null until first drag.
+  Offset? dragOffset;
+  static const _fabSize = 44.0;
+
   @override
   void dispose() { input.dispose(); super.dispose(); }
 
@@ -25,17 +32,42 @@ class _FloatingCompanionChatState extends State<FloatingCompanionChat> {
     widget.agent.event(widget.agent.lastEvent, automatic: false, message: text);
   }
 
+  Future<void> _menu() async {
+    final choice = await showModalBottomSheet<String>(context: context,
+      builder: (sheet) => SafeArea(child: Column(mainAxisSize: MainAxisSize.min, children: [
+        ListTile(leading: const Icon(Icons.chat_bubble_rounded,
+            color: Color(0xFFB37BA8)),
+          title: const Text('文字聊天'),
+          subtitle: const Text('边玩边和TA打字说话（调用模型）'),
+          onTap: () => Navigator.pop(sheet, 'chat')),
+        if (widget.onVoiceCall != null)
+          ListTile(leading: const Icon(Icons.record_voice_over_rounded,
+              color: Color(0xFF8A70AD)),
+            title: const Text('音视频对话'),
+            subtitle: const Text('语音/连续对话，共用角色原有模型'),
+            onTap: () => Navigator.pop(sheet, 'call')),
+      ])));
+    if (!mounted) return;
+    if (choice == 'chat') setState(() => open = true);
+    if (choice == 'call') widget.onVoiceCall?.call();
+  }
+
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: widget.agent,
-    builder: (context, _) {
+    builder: (context, _) => LayoutBuilder(builder: (context, bounds) {
       final a = widget.agent;
-      final width = math.min(360.0, MediaQuery.sizeOf(context).width - 28);
-      final height = math.min(380.0, MediaQuery.sizeOf(context).height * .48);
-      return Column(mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.end, children: [
-          if (open) Container(width: width, height: height,
-            margin: const EdgeInsets.only(bottom: 10),
+      final width = math.min(360.0, bounds.maxWidth - 28);
+      final height = math.min(380.0, bounds.maxHeight * .48);
+      final base = Offset(bounds.maxWidth - 14 - _fabSize,
+          bounds.maxHeight - 18 - _fabSize);
+      final fabPos = base + (dragOffset ?? Offset.zero);
+      final clamped = Offset(
+        fabPos.dx.clamp(4.0, bounds.maxWidth - _fabSize - 4).toDouble(),
+        fabPos.dy.clamp(4.0, bounds.maxHeight - _fabSize - 4).toDouble());
+      return Stack(children: [
+        if (open) Positioned(right: 14, bottom: 76,
+          child: Container(width: width, height: height,
             decoration: BoxDecoration(color: const Color(0xF9FFFAFE),
               borderRadius: BorderRadius.circular(22),
               boxShadow: const [BoxShadow(color: Color(0x35000000), blurRadius: 24)]),
@@ -86,17 +118,32 @@ class _FloatingCompanionChatState extends State<FloatingCompanionChat> {
                           child: CircularProgressIndicator(strokeWidth: 2))
                       : const Icon(Icons.send_rounded)),
                 ]))),
-            ])),
-          FloatingActionButton.small(
-            heroTag: 'intimacy_chat_${a.roleId}',
-            tooltip: open ? '收起亲密聊天' : '打开亲密聊天',
-            backgroundColor: const Color(0xFFB37BA8),
-            foregroundColor: Colors.white,
-            onPressed: () => setState(() => open = !open),
-            child: Icon(open ? Icons.keyboard_arrow_down : Icons.chat_bubble_rounded),
-          ),
-        ]);
-    },
+            ]))),
+        Positioned(left: clamped.dx, top: clamped.dy,
+          child: GestureDetector(
+            onPanUpdate: (details) => setState(() {
+              dragOffset = (dragOffset ?? Offset.zero) + details.delta;
+            }),
+            onPanEnd: (_) {
+              // Keep the offset within bounds after the drag settles.
+              final over = Offset(
+                (clamped.dx - fabPos.dx), (clamped.dy - fabPos.dy));
+              if (over != Offset.zero) {
+                dragOffset = (dragOffset ?? Offset.zero) + over;
+              }
+            },
+            onTap: _menu,
+            child: SizedBox(width: _fabSize, height: _fabSize, child: FloatingActionButton.small(
+              heroTag: 'intimacy_chat_${a.roleId}',
+              tooltip: '聊天 / 音视频对话（可拖动）',
+              backgroundColor: const Color(0xFFB37BA8),
+              foregroundColor: Colors.white,
+              onPressed: _menu,
+              child: const Icon(Icons.all_inclusive_rounded),
+            )),
+          )),
+      ]);
+    }),
   );
 }
 
@@ -105,8 +152,10 @@ class CompanionScaffold extends StatelessWidget {
   final Widget child;
   final CompanionController agent;
   final List<Widget>? actions;
+  /// Passed through to the corner button's voice-call menu entry.
+  final VoidCallback? onVoiceCall;
   const CompanionScaffold({super.key, required this.title,
-    required this.child, required this.agent, this.actions});
+    required this.child, required this.agent, this.actions, this.onVoiceCall});
   @override
   Widget build(BuildContext context) => Scaffold(
     backgroundColor: const Color(0xFFFFFBFE),
@@ -114,8 +163,8 @@ class CompanionScaffold extends StatelessWidget {
       backgroundColor: const Color(0xFFFFF7FC), actions: actions),
     body: Stack(children: [
       Positioned.fill(child: child),
-      Positioned(right: 14, bottom: 18,
-        child: FloatingCompanionChat(agent: agent)),
+      Positioned.fill(
+        child: FloatingCompanionChat(agent: agent, onVoiceCall: onVoiceCall)),
     ]),
   );
 }

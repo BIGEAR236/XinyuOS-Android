@@ -10,7 +10,9 @@ import '../widgets/pet_art.dart';
 
 class PetPage extends StatefulWidget {
   final CompanionController agent;
-  const PetPage({super.key,required this.agent});
+  /// Opens the digital voice call page from the corner button menu.
+  final VoidCallback? onVoiceCall;
+  const PetPage({super.key,required this.agent,this.onVoiceCall});
   @override State<PetPage> createState()=>_PetPageState();
 }
 class _PetPageState extends State<PetPage> {
@@ -103,6 +105,7 @@ class _PetPageState extends State<PetPage> {
   @override Widget build(BuildContext context){
     final p=pet;
     return CompanionScaffold(title:'与${widget.agent.roleName}一起养宠物',agent:widget.agent,
+      onVoiceCall:widget.onVoiceCall,
       actions:[IconButton(tooltip:'宠物图鉴',onPressed:()=>showDialog<void>(context:context,builder:(context)=>AlertDialog(
         title:const Text('30种萌宠图鉴'),content:SizedBox(width:320,height:390,child:ListView(children:[for(final s in petSpecies)
           ListTile(leading:Text(s.emoji,style:const TextStyle(fontSize:25)),title:Text(s.name),subtitle:Text('${rarityNames[s.rarity]} · ${s.trait} · 角色权重${s.weight}'))])),actions:[TextButton(onPressed:()=>Navigator.pop(context),child:const Text('关闭'))])),icon:const Icon(Icons.auto_stories_outlined))],

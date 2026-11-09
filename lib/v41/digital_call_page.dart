@@ -287,6 +287,7 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
 
   // ---- Voice bank picker ----
   Future<void> _voiceSheet() async {
+    var auditioning = -1; // sid currently synthesizing (UI hint).
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -295,7 +296,7 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
           ListTile(title: Text('为「${widget.controller.character(widget.roleId)?.name ?? 'TA'}」选择音色',
             style: const TextStyle(fontWeight: FontWeight.bold)),
             subtitle: Text(voiceReady
-              ? '内置 ${voice.numSpeakers} 个音色（离线音色库）· 点“试听”后选“使用”'
+              ? '内置 ${voice.numSpeakers} 个音色 · 女声 3-57 · 男声 58-102 · 点“试听”挑最合适的'
               : voiceSid >= 0 ? '离线音色引擎加载中（首次约 10 秒）…'
               : '离线音色引擎未加载，选择音色后将自动加载'),
           ),
@@ -308,18 +309,26 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
           const Divider(),
           for (final preset in voicePresets)
             ListTile(
-              leading: CircleAvatar(radius: 17, backgroundColor: const Color(0xFFEBD9F2),
-                child: Text(preset.name.substring(0, 1), style: const TextStyle(fontSize: 13))),
-              title: Text('${preset.name} · ${preset.desc}'),
-              subtitle: Text('编号 ${preset.sid} · 实际听感以试听为准'),
+              leading: CircleAvatar(radius: 17, backgroundColor: preset.male
+                ? const Color(0xFFDCE7F5) : const Color(0xFFF6DDE9),
+                child: Icon(preset.male ? Icons.face_6_rounded : Icons.face_3_rounded,
+                  size: 16, color: preset.male ? const Color(0xFF5D7BA8) : const Color(0xFFB7739B))),
+              title: Text('${preset.name} · ${preset.hint}'),
+              subtitle: Text('编号 ${preset.sid} · ${preset.male ? "男声" : "女声"}（性别确定，音色以试听为准）'),
               trailing: Wrap(spacing: 4, children: [
-                TextButton(onPressed: voiceReady ? () async {
-                  await speaker.stop();
-                  await voice.speak('你好，我是${preset.name}音色，很高兴认识你。', sid: preset.sid);
-                } : null, child: const Text('试听')),
+                TextButton(
+                  onPressed: !voiceReady || auditioning >= 0 ? null : () async {
+                    refresh(() => auditioning = preset.sid);
+                    // Let the hint paint BEFORE the blocking synthesis.
+                    await Future<void>.delayed(const Duration(milliseconds: 100));
+                    await speaker.stop();
+                    await voice.speak('你好，很高兴和你聊天，这就是这个音色的声音。', sid: preset.sid);
+                    refresh(() => auditioning = -1);
+                  },
+                  child: Text(auditioning == preset.sid ? '合成中…' : '试听')),
                 if (voiceSid == preset.sid)
                   const Icon(Icons.check_circle, color: Color(0xFF8A70AD), size: 20)
-                else TextButton(onPressed: () {
+                else TextButton(onPressed: auditioning >= 0 ? null : () {
                   setState(() => voiceSid = preset.sid);
                   _persistVoiceId();
                   if (!voiceReady) {
@@ -333,11 +342,11 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
             ),
           Padding(padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
             child: Row(children: [
-              Expanded(child: Text('自定义编号（0-${voice.numSpeakers > 0 ? voice.numSpeakers - 1 : 803}）：',
+              Expanded(child: Text('自定义编号（女声 3-57 · 男声 58-102）：',
                 style: const TextStyle(fontSize: 12))),
               SizedBox(width: 74, child: TextField(
                 keyboardType: TextInputType.number,
-                decoration: const InputDecoration(isDense: true, hintText: '如 200'),
+                decoration: const InputDecoration(isDense: true, hintText: '如 72'),
                 onSubmitted: (value) {
                   final sid = int.tryParse(value.trim());
                   if (sid == null || sid < 0) return;
@@ -352,9 +361,10 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
                 })),
             ])),
           const Padding(padding: EdgeInsets.only(bottom: 10),
-            child: Text('命名仅供参考，实际听感因模型而异；试听满意再使用。',
+            child: Text('编号性别由官方音色表保证；每个人的听感不同，多试听几个总能遇到合适的。',
               style: TextStyle(fontSize: 11, color: Colors.black54))),
-        ])))));
+        ])))),
+      );
   }
 
   // ---- Hands-free conversation loop (offline engine only) ----

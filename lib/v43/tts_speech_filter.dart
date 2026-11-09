@@ -1,8 +1,12 @@
 /// Strips roleplay/formatting that should never be SPOKEN aloud before the
-/// text goes to TTS: action descriptions (*轻轻笑了笑*、（他抬头看你）),
-/// markdown emphasis, red-packet/gift tokens, timestamps and emojis.
-/// Normal dialogue — including ordinary foreign words — stays untouched.
+/// text goes to TTS. Story-mode replies keep ONLY quoted dialogue (the
+/// character's spoken words); narration and actions stay silent. When no
+/// quotes are present the plain cleanup applies.
 library;
+
+/// Paired quotes: “” ‘’ «» "" '' plus CJK 「」『』. Group 1 holds the content.
+final _dialogueQuote = RegExp(
+    '[“"\']([^“”"\'』」]{1,150})[”"\']|「([^」]{1,150})」|『([^』]{1,150})』');
 
 final _noiseTokens = RegExp(r'\[虚拟(?:红包|礼物)[^\]]*\]');
 final _starActions = RegExp(r'\*[^*\n]{1,60}\*');
@@ -18,7 +22,16 @@ final _repeatPause = RegExp(r'[，,、\s]{2,}');
 
 /// Returns the speakable text, or '' when nothing meaningful is left.
 String spokenText(String raw) {
-  var text = raw
+  // Story mode: extract only the quoted dialogue — what the character
+  // actually SAYS to the player. Everything else is narration/action.
+  final quotes = <String>[];
+  for (final match in _dialogueQuote.allMatches(raw)) {
+    final segment =
+        match.group(1) ?? match.group(2) ?? match.group(3) ?? '';
+    if (segment.trim().isNotEmpty) quotes.add(segment.trim());
+  }
+  final source = quotes.isNotEmpty ? quotes.join('，') : raw;
+  var text = source
       .replaceAll(_noiseTokens, '，')
       .replaceAll(_starActions, '，')
       .replaceAll(_underscoreActions, '，')

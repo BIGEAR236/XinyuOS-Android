@@ -8,7 +8,8 @@ import '../widgets/chat_overlay.dart';
 
 class MusicPage extends StatefulWidget {
   final CompanionController agent; final MusicRoom room;
-  const MusicPage({super.key,required this.agent,required this.room});
+  final VoidCallback? onVoiceCall;
+  const MusicPage({super.key,required this.agent,required this.room,this.onVoiceCall});
   @override State<MusicPage> createState()=>_MusicPageState();
 }
 class _MusicPageState extends State<MusicPage> {
@@ -30,6 +31,7 @@ class _MusicPageState extends State<MusicPage> {
   @override Widget build(BuildContext context){
     final r=widget.room;
     return CompanionScaffold(title:'🎵 和${widget.agent.roleName}一起听歌',agent:widget.agent,
+      onVoiceCall:widget.onVoiceCall,
       child:ListView(padding:const EdgeInsets.all(18),children:[
         const SizedBox(height:12),
         Center(child:Container(width:190,height:190,decoration:BoxDecoration(borderRadius:BorderRadius.circular(24),gradient:const LinearGradient(colors:[Color(0xFFE8CDFA),Color(0xFFFFD6EA)])),
@@ -67,7 +69,8 @@ double mathMax(double a,double b)=>a>b?a:b;
 
 class WatchPage extends StatefulWidget {
   final CompanionController agent;
-  const WatchPage({super.key,required this.agent});
+  final VoidCallback? onVoiceCall;
+  const WatchPage({super.key,required this.agent,this.onVoiceCall});
   @override State<WatchPage> createState()=>_WatchPageState();
 }
 class _WatchPageState extends State<WatchPage> {
@@ -115,6 +118,7 @@ class _WatchPageState extends State<WatchPage> {
   @override Widget build(BuildContext context){
     final p=controller;
     return CompanionScaffold(title:'🎬 和${widget.agent.roleName}一起看视频',agent:widget.agent,
+      onVoiceCall:widget.onVoiceCall,
       child:ListView(padding:const EdgeInsets.all(16),children:[
         AspectRatio(aspectRatio:16/9,child:Container(color:const Color(0xFF292438),child:p?.value.isInitialized==true?
           Center(child:AspectRatio(aspectRatio:p!.value.aspectRatio,child:VideoPlayer(p))):

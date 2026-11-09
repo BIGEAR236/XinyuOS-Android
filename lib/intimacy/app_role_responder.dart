@@ -28,9 +28,37 @@ class AppRoleResponder implements RoleResponder {
       throw StateError('尚未设置 API Key，请到 API 连接台填写并测试。');
     }
     final scripted = event.startsWith('剧情专用输出契约');
+    // Companion chats stay aware of the ongoing relationship: inject a
+    // digest of the CURRENT mode's main chat thread (activePrivateThread
+    // follows the daily/story switch), so the character remembers what you
+    // two talked about — per mode, without mixing the two histories.
+    var modeContext = '';
+    if (!scripted) {
+      final storyMode = app.roleChatMode(roleId) == 'story';
+      try {
+        final thread = app.activePrivateThread(roleId);
+        final msgs = app.threadMessages(thread)
+            .where((m) => !m.recalled && m.text.trim().isNotEmpty)
+            .toList();
+        final modeName = storyMode ? '沉浸剧情' : '日常聊天';
+        if (msgs.isEmpty) {
+          modeContext = '你们当前处于$modeName模式，还没有聊天记录。';
+        } else {
+          final recent = msgs.length > 6 ? msgs.sublist(msgs.length - 6) : msgs;
+          final digest = recent
+              .map((m) => '${m.senderId == 'me' ? '用户' : role.name}：'
+                  '${m.text.replaceAll(RegExp(r'\s+'), ' ')}')
+              .join('；');
+          final clipped = digest.length > 800
+              ? digest.substring(digest.length - 800) : digest;
+          modeContext = '你们当前处于$modeName模式。最近的对话摘录'
+              '（仅供了解氛围与进展，切勿复述或突然提起私密细节）：$clipped';
+        }
+      } catch (_) { /* context is best-effort; chat must still work */ }
+    }
     final incoming = scripted
         ? '当前任务：根据用户当前输入，严格按以下结构化格式输出，不需要其他解释。\n$event\n用户输入：$userMessage'
-        : '本地虚拟互动事件（仅作为已发生的游戏事件，不代表现实世界）：$event\n'
+        : '$modeContext\n本地虚拟互动事件（仅作为已发生的游戏事件，不代表现实世界）：$event\n'
           '用户刚刚说：${userMessage.isEmpty ? '（用户当前没有补充文字）' : userMessage}';
     final sessionKey = scripted ? '$roleId:story' : '$roleId:play';
     final history = _localTurns.putIfAbsent(sessionKey, () => <ModelTurn>[]);

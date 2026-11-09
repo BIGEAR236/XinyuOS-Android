@@ -7,42 +7,52 @@ import 'package:just_audio/just_audio.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa_onnx;
 
-/// One named voice from the bundled theresa model (804 speakers). The sid
-/// numbers are a spread across the speaker space; what a given sid sounds
-/// like can only be judged by ear — hence the audition button in the UI.
+/// One suggested voice from the bundled kokoro model. Gender is GUARANTEED
+/// by the official sid map (female 3-57, male 58-102); the flavour text is
+/// only a hint — audition before committing.
 class XyVoicePreset {
   final String name;
-  final String desc;
+  final String hint;
   final int sid;
-  const XyVoicePreset(this.name, this.desc, this.sid);
+  final bool male;
+  const XyVoicePreset(this.name, this.hint, this.sid, this.male);
 }
 
+/// Official kokoro-multi-lang-v1_1 speaker layout: female 3-57, male 58-102.
+const int kFemaleSidMin = 3, kFemaleSidMax = 57;
+const int kMaleSidMin = 58, kMaleSidMax = 102;
+
 const voicePresets = <XyVoicePreset>[
-  XyVoicePreset('霸道总裁', '低沉、有压迫感', 5),
-  XyVoicePreset('低音大叔', '沉稳磁性', 12),
-  XyVoicePreset('小奶狗', '软萌少年感', 27),
-  XyVoicePreset('阳光少年', '清亮活泼', 40),
-  XyVoicePreset('清冷学长', '干净疏离', 58),
-  XyVoicePreset('温柔姐姐', '轻柔耐心', 66),
-  XyVoicePreset('御姐', '成熟慵懒', 74),
-  XyVoicePreset('甜妹', '甜而不腻', 89),
-  XyVoicePreset('软糯小猫', '撒娇感', 102),
-  XyVoicePreset('知性女声', '新闻主播风', 117),
-  XyVoicePreset('元气少女', '高亮有活力', 130),
-  XyVoicePreset('沙哑烟嗓', '故事感', 145),
+  XyVoicePreset('女声 · 一号', '清亮自然', 3, false),
+  XyVoicePreset('女声 · 二号', '温润亲和', 10, false),
+  XyVoicePreset('女声 · 三号', '知性大方', 21, false),
+  XyVoicePreset('女声 · 四号', '轻柔细腻', 33, false),
+  XyVoicePreset('女声 · 五号', '甜美活泼', 45, false),
+  XyVoicePreset('女声 · 六号', '优雅从容', 55, false),
+  XyVoicePreset('男声 · 一号', '干净利落', 58, true),
+  XyVoicePreset('男声 · 二号', '沉稳大气', 64, true),
+  XyVoicePreset('男声 · 三号', '磁性低音', 72, true),
+  XyVoicePreset('男声 · 四号', '阳光青年', 81, true),
+  XyVoicePreset('男声 · 五号', '成熟厚重', 90, true),
+  XyVoicePreset('男声 · 六号', '温柔少年', 100, true),
 ];
 
-/// On-device neural TTS (sherpa-onnx VITS, vits-zh-hf-theresa, 804 voices).
-/// Model files are bundled by CI under assets/sherpa/tts/ and copied to the
-/// app-support dir on first use. Playback goes through just_audio; awaiting
-/// speak() resolves when playback finishes (or is stopped), which drives the
-/// hands-free conversation loop.
+/// On-device neural TTS (sherpa-onnx kokoro int8, 103 voices, 24kHz).
+/// Files are bundled by CI under assets/sherpa/tts/ (flat) and copied to the
+/// app-support dir on first use.
+///
+/// Playback is a double-buffered pipeline: sentence N+1 is synthesized while
+/// sentence N is playing, so inter-sentence gaps shrink to roughly
+/// max(0, playtime - synthtime). Synthesis itself is a synchronous native
+/// call; it briefly blocks the UI thread but never the audio playback.
 class XyOfflineTts {
   sherpa_onnx.OfflineTts? _engine;
   final AudioPlayer _player = AudioPlayer();
   bool _loading = false;
+  /// True while a synchronous generate() call is running (for UI hints).
+  bool synthesizing = false;
   /// Monotonic speak() generation: stop() and a newer speak() invalidate
-  /// any sentence loop still running by bumping the counter.
+  /// any pipeline still running by bumping the counter.
   int _speakGeneration = 0;
 
   bool get isReady => _engine != null;
@@ -57,17 +67,16 @@ class XyOfflineTts {
       final dir = await _copyAssets();
       final config = sherpa_onnx.OfflineTtsConfig(
         model: sherpa_onnx.OfflineTtsModelConfig(
-          vits: sherpa_onnx.OfflineTtsVitsModelConfig(
-            model: '$dir/theresa.onnx',
-            lexicon: '$dir/lexicon.txt',
+          kokoro: sherpa_onnx.OfflineTtsKokoroModelConfig(
+            model: '$dir/model.int8.onnx',
+            voices: '$dir/voices.bin',
             tokens: '$dir/tokens.txt',
-            dictDir: '$dir/dict',
-            lengthScale: 1.0,
+            lexicon: '$dir/lexicon-us-en.txt,$dir/lexicon-zh.txt',
           ),
           numThreads: 2,
           debug: false,
         ),
-        ruleFsts: '$dir/phone.fst,$dir/date.fst,$dir/number.fst',
+        ruleFsts: '$dir/phone-zh.fst,$dir/date-zh.fst,$dir/number-zh.fst',
         maxNumSentences: 1,
       );
       _engine = sherpa_onnx.OfflineTts(config);
@@ -88,9 +97,8 @@ class XyOfflineTts {
     for (final asset in manifest.listAssets()) {
       if (!asset.startsWith('assets/sherpa/tts/')) continue;
       final relative = asset.substring('assets/sherpa/tts/'.length);
-      if (relative.isEmpty) continue;
+      if (relative.isEmpty || relative.contains('/')) continue;
       final target = File('${targetRoot.path}/$relative');
-      await target.parent.create(recursive: true);
       final data = await rootBundle.load(asset);
       if (!await target.exists() ||
           await target.length() != data.lengthInBytes) {
@@ -102,28 +110,53 @@ class XyOfflineTts {
     return targetRoot.path;
   }
 
-  /// Generates audio for [text] with speaker [sid] and plays it sentence by
-  /// sentence — the first sound starts after the FIRST short sentence is
-  /// synthesized instead of the whole paragraph. The returned future
-  /// completes when all sentences finished playing (or playback is stopped).
-  Future<void> speak(String text,
-      {int sid = 0, double speed = 1.0}) async {
+  /// Speaks [text] sentence by sentence with double buffering; the returned
+  /// future completes when everything finished playing (or was stopped).
+  Future<void> speak(String text, {int sid = 0, double speed = 1.0}) async {
     final engine = _engine;
     if (engine == null || text.isEmpty) return;
+    // Old saves may carry sids from the previous model; clamp into range.
+    final safeSid = sid.clamp(0, engine.numSpeakers - 1);
     final generation = ++_speakGeneration;
     final sentences = _splitSentences(text);
-    for (var i = 0; i < sentences.length; i++) {
-      if (generation != _speakGeneration) return; // stopped or superseded
-      final audio = engine.generate(text: sentences[i], sid: sid, speed: speed);
+    final tmp = await getTemporaryDirectory();
+    // Sentence 0: synthesized before any audio plays (brief UI freeze).
+    var file = await _synthesize(engine, sentences[0], safeSid, speed, tmp, 0);
+    if (generation != _speakGeneration) return;
+    await _player.stop();
+    await _player.setFilePath(file.path);
+    var playback = _player.play();
+    // Sentence i: synthesized WHILE sentence i-1 plays (audio runs on the
+    // platform thread and is not blocked by the synchronous synthesis).
+    for (var i = 1; i < sentences.length; i++) {
+      file = await _synthesize(engine, sentences[i], safeSid, speed, tmp, i);
       if (generation != _speakGeneration) return;
-      if (audio.samples.isEmpty) continue;
-      final bytes = _wavBytes(audio.samples, audio.sampleRate);
-      final tmp = await getTemporaryDirectory();
-      final file = File('${tmp.path}/xy_tts_${sid}_$i.wav');
-      await file.writeAsBytes(bytes, flush: true);
-      await _player.stop();
+      await playback; // previous sentence finished playing
       await _player.setFilePath(file.path);
-      await _player.play();
+      playback = _player.play();
+    }
+    await playback;
+  }
+
+  Future<File> _synthesize(sherpa_onnx.OfflineTts engine, String sentence,
+      int sid, double speed, Directory tmp, int index) async {
+    synthesizing = true;
+    try {
+      final audio = engine.generate(text: sentence, sid: sid, speed: speed);
+      final bytes =
+          audio.samples.isEmpty ? null : _wavBytes(audio.samples, audio.sampleRate);
+      final file = File('${tmp.path}/xy_tts_${sid}_$index.wav');
+      if (bytes == null) {
+        // Empty synthesis result: write a tiny silent wav so the pipeline
+        // keeps its double-buffer sequencing intact.
+        await file.writeAsBytes(_wavBytes(Float32List(1), audio.sampleRate),
+            flush: true);
+      } else {
+        await file.writeAsBytes(bytes, flush: true);
+      }
+      return file;
+    } finally {
+      synthesizing = false;
     }
   }
 
@@ -149,11 +182,11 @@ class XyOfflineTts {
         merged.add(sentence);
       }
     }
-    return merged;
+    return merged.isEmpty ? [text] : merged;
   }
 
   Future<void> stop() async {
-    _speakGeneration++; // Invalidate any running sentence loop.
+    _speakGeneration++; // Invalidate any running pipeline.
     try {
       await _player.stop();
     } catch (_) { /* player may already be stopped */ }
