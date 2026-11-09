@@ -1,7 +1,7 @@
 name: xinyu_os
 publish_to: none
 description: 心屿 OS — 跨平台 AI 虚拟手机（本地优先）
-version: 4.7.1+23
+version: 4.8.0+24
 
 environment:
   sdk: '>=3.10.0 <4.0.0'
@@ -34,8 +34,10 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
-  # CI downloads the offline ASR model files into assets/sherpa/ before
-  # `flutter build`; see android-build.yml. Local builds without the files
-  # simply fall back to system speech recognition.
+  # CI downloads the offline ASR/TTS model files into assets/sherpa/ before
+  # `flutter build`; see android-build.yml. NOTE: Flutter asset directory
+  # entries are NOT recursive — every subdirectory must be listed explicitly.
   assets:
     - assets/sherpa/
+    - assets/sherpa/tts/
+    - assets/sherpa/tts/dict/

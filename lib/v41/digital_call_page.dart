@@ -175,8 +175,30 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
     if (listening) await recognizer.stop();
     await speaker.stop();
     setState(() { sending = true; listening = false; status = '正在联系原聊天模型…'; });
+    final thread = widget.controller.activePrivateThread(widget.roleId);
+    // Streaming first-sentence pre-speak (offline voice channel): as soon as
+    // the LLM stream yields one complete sentence, synthesize and play it;
+    // the rest of the reply continues seamlessly afterwards. This cuts the
+    // time-to-first-sound from (full reply + full synthesis) to (first
+    // sentence + first-sentence synthesis).
+    var preSpoken = '';
+    var preSource = '';
+    var preSpeakDone = Future<void>.value();
+    Timer? streamPoll;
+    if (voiceSid >= 0 && voiceReady) {
+      streamPoll = Timer.periodic(const Duration(milliseconds: 250), (_) {
+        final partial = widget.controller.partialReplies[thread] ?? '';
+        if (partial.length <= preSource.length || preSpoken.isNotEmpty) return;
+        preSource = partial;
+        final first = _firstSpeakableSentence(spokenText(partial));
+        if (first == null) return;
+        preSpoken = first;
+        if (convo) setState(() => convoState = 'speaking');
+        if (mounted) setState(() => talking = true);
+        preSpeakDone = voice.speak(first, sid: voiceSid);
+      });
+    }
     try {
-      final thread = widget.controller.activePrivateThread(widget.roleId);
       final oldCount = widget.controller.threadMessages(thread)
         .where((m) => m.senderId == role.id).length;
       final error = await widget.controller.sendPrivate(role, text);
@@ -190,7 +212,28 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
       // tokens would otherwise be read aloud verbatim (esp. story mode).
       final speakable = spokenText(
           answer.length > 1200 ? answer.substring(answer.length - 1200) : answer);
-      if (speakable.isNotEmpty) {
+      if (voiceSid >= 0 && voiceReady) {
+        // Skip what the pre-speak already covered, then continue playing.
+        var remaining = speakable;
+        if (preSpoken.isNotEmpty) {
+          if (speakable.startsWith(preSpoken)) {
+            remaining = speakable.substring(preSpoken.length);
+          } else if (speakable.contains(preSpoken)) {
+            remaining = speakable.substring(
+                speakable.indexOf(preSpoken) + preSpoken.length);
+          }
+        }
+        await preSpeakDone; // Let the first sentence finish uninterrupted.
+        if (!mounted) return;
+        if (remaining.isNotEmpty) {
+          if (convo) setState(() => convoState = 'speaking');
+          setState(() => talking = true);
+          await voice.speak(remaining, sid: voiceSid);
+        }
+        if (!mounted) return;
+        setState(() => talking = false);
+        _onSpeakDone();
+      } else if (speakable.isNotEmpty) {
         await _speakOut(speakable);
       } else if (convo) {
         _convoListen(); // Nothing speakable (pure actions): keep listening.
@@ -200,7 +243,22 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
       if (mounted) setState(() => status = '发送失败，请检查原模型配置');
       if (convo && mounted) _convoListen(); // Let the user retry by voice.
     }
-    finally { if (mounted) setState(() => sending = false); }
+    finally {
+      streamPoll?.cancel();
+      if (mounted) setState(() => sending = false);
+    }
+  }
+
+  /// The first complete, long-enough sentence of [text] for pre-speaking;
+  /// null while the stream has not produced one yet. Over-long unpunctuated
+  /// prefixes are force-cut so pre-speak is not starved.
+  String? _firstSpeakableSentence(String text) {
+    const marks = '。！？!?；;';
+    for (var i = 0; i < text.length; i++) {
+      if (i >= 46) return text.substring(0, 46);
+      if (marks.contains(text[i]) && i + 1 >= 6) return text.substring(0, i + 1);
+    }
+    return null;
   }
 
   // ---- Unified speech output (system TTS or bundled neural voices) ----

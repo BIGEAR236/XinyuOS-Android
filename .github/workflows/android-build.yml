@@ -129,7 +129,12 @@ jobs:
           tar -xjf /tmp/dict.tar.bz2 -C /tmp
           cp -r /tmp/dict assets/sherpa/tts/dict
           rm -f /tmp/dict.tar.bz2 && rm -rf /tmp/dict
+          # Flatten dict subdirectories (pos_dict etc.) so one pubspec asset
+          # entry covers everything; jieba only reads the flat dict files.
+          find assets/sherpa/tts/dict -mindepth 2 -type f -exec mv -n {} assets/sherpa/tts/dict/ \; 2>/dev/null || true
+          find assets/sherpa/tts/dict -mindepth 1 -type d -empty -delete || true
           du -sh assets/sherpa/tts
+          find assets/sherpa/tts -type d | sort
           df -h /
       - name: Install dependencies
         run: flutter pub get
@@ -159,7 +164,7 @@ jobs:
       - name: Publish APK to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v4.7.1-b${{ github.run_number }}
-          name: 小雨机 4.7.1 构建 ${{ github.run_number }}
-          body: 正式签名 APK（小雨机 V4.7.1：安卓启动器图标换为你提供的形象图；含分角色“我”头像、图标实时预览、804 音色库与连续对话修复）。APK 约 240MB，覆盖安装即可（不要卸载）。对应提交 ${{ github.sha }}。
+          tag_name: v4.8.0-b${{ github.run_number }}
+          name: 小雨机 4.8.0 构建 ${{ github.run_number }}
+          body: 正式签名 APK（小雨机 V4.8.0：修复音色库未打进安装包的问题（assets 子目录声明）；语音回复改为“首句即说”流水线，大幅缩短响应等待）。覆盖安装即可（不要卸载）。对应提交 ${{ github.sha }}。
           files: build/app/outputs/flutter-apk/app-release.apk

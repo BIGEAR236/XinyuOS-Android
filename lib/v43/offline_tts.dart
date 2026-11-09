@@ -41,6 +41,9 @@ class XyOfflineTts {
   sherpa_onnx.OfflineTts? _engine;
   final AudioPlayer _player = AudioPlayer();
   bool _loading = false;
+  /// Monotonic speak() generation: stop() and a newer speak() invalidate
+  /// any sentence loop still running by bumping the counter.
+  int _speakGeneration = 0;
 
   bool get isReady => _engine != null;
   int get numSpeakers => _engine?.numSpeakers ?? 0;
@@ -99,24 +102,58 @@ class XyOfflineTts {
     return targetRoot.path;
   }
 
-  /// Generates audio for [text] with speaker [sid] and plays it. The returned
-  /// future completes when playback ends or is stopped (e.g. by [stop]).
+  /// Generates audio for [text] with speaker [sid] and plays it sentence by
+  /// sentence — the first sound starts after the FIRST short sentence is
+  /// synthesized instead of the whole paragraph. The returned future
+  /// completes when all sentences finished playing (or playback is stopped).
   Future<void> speak(String text,
       {int sid = 0, double speed = 1.0}) async {
     final engine = _engine;
     if (engine == null || text.isEmpty) return;
-    final audio = engine.generate(text: text, sid: sid, speed: speed);
-    if (audio.samples.isEmpty) return;
-    final bytes = _wavBytes(audio.samples, audio.sampleRate);
-    final tmp = await getTemporaryDirectory();
-    final file = File('${tmp.path}/xy_tts_$sid.wav');
-    await file.writeAsBytes(bytes, flush: true);
-    await _player.stop();
-    await _player.setFilePath(file.path);
-    await _player.play();
+    final generation = ++_speakGeneration;
+    final sentences = _splitSentences(text);
+    for (var i = 0; i < sentences.length; i++) {
+      if (generation != _speakGeneration) return; // stopped or superseded
+      final audio = engine.generate(text: sentences[i], sid: sid, speed: speed);
+      if (generation != _speakGeneration) return;
+      if (audio.samples.isEmpty) continue;
+      final bytes = _wavBytes(audio.samples, audio.sampleRate);
+      final tmp = await getTemporaryDirectory();
+      final file = File('${tmp.path}/xy_tts_${sid}_$i.wav');
+      await file.writeAsBytes(bytes, flush: true);
+      await _player.stop();
+      await _player.setFilePath(file.path);
+      await _player.play();
+    }
+  }
+
+  /// Splits text into speakable sentences (merge tiny fragments so the
+  /// pipeline is not dominated by split-second blips).
+  List<String> _splitSentences(String text) {
+    const breaks = '。！？!?；;\n';
+    final raw = <String>[];
+    var buffer = '';
+    for (final char in text.split('')) {
+      buffer += char;
+      if (breaks.contains(char)) {
+        if (buffer.trim().isNotEmpty) raw.add(buffer.trim());
+        buffer = '';
+      }
+    }
+    if (buffer.trim().isNotEmpty) raw.add(buffer.trim());
+    final merged = <String>[];
+    for (final sentence in raw) {
+      if (merged.isNotEmpty && (sentence.length < 4 || merged.last.length < 4)) {
+        merged[merged.length - 1] = '${merged.last}$sentence';
+      } else {
+        merged.add(sentence);
+      }
+    }
+    return merged;
   }
 
   Future<void> stop() async {
+    _speakGeneration++; // Invalidate any running sentence loop.
     try {
       await _player.stop();
     } catch (_) { /* player may already be stopped */ }
