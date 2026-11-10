@@ -294,7 +294,9 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
     var voices = <Map<dynamic, dynamic>>[];
     var loading = true;
     try {
-      final raw = await speaker.getVoices();
+      // getVoices is a GETTER in flutter_tts (no parentheses); each voice
+      // Map carries at least name + locale.
+      final raw = await speaker.getVoices;
       voices = raw.whereType<Map<dynamic, dynamic>>().toList()
         ..sort((a, b) {
           int zh(Map v) =>
