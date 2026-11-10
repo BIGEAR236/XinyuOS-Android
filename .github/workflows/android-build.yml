@@ -1,4 +1,4 @@
-name: 生成心屿OS正式签名 APK
+﻿name: 生成心屿OS正式签名 APK
 on:
   workflow_dispatch:
   push:
@@ -100,28 +100,6 @@ jobs:
           fi
           ls -lh assets/sherpa/
           df -h /
-      - name: Fetch offline TTS voice model
-        run: |
-          # kokoro-int8-multi-lang-v1_1: 103 speakers (female 3-57, male
-          # 58-102, official sid map), int8 → fast on-device synthesis.
-          # Mirror prefix as fallback (public release asset).
-          set -e
-          mkdir -p assets/sherpa/tts
-          TAR=kokoro-int8-multi-lang-v1_1.tar.bz2
-          GH_TTS=https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/$TAR
-          for URL in "$GH_TTS" "https://ghfast.top/$GH_TTS"; do
-            if curl -fL --retry 2 --retry-delay 5 --connect-timeout 20 -o /tmp/tts.tar.bz2 "$URL" \
-               && tar -xjf /tmp/tts.tar.bz2 -C /tmp; then GOT=1; break; fi
-          done
-          test "$GOT" = 1 || { echo 'all TTS mirrors failed'; exit 1; }
-          DIR=$(find /tmp -maxdepth 1 -type d -name 'kokoro-int8-multi-lang-v1_1*' | head -1)
-          for F in model.int8.onnx voices.bin tokens.txt lexicon-us-en.txt lexicon-zh.txt phone-zh.fst date-zh.fst number-zh.fst; do
-            find "$DIR" -name "$F" -exec cp {} assets/sherpa/tts/ \;
-          done
-          rm -f /tmp/tts.tar.bz2 && rm -rf "$DIR"
-          ls -lh assets/sherpa/tts/
-          du -sh assets/sherpa/tts
-          df -h /
       - name: Install dependencies
         run: flutter pub get
       - name: Check Flutter and Dart
@@ -150,7 +128,7 @@ jobs:
       - name: Publish APK to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v4.9.1-b${{ github.run_number }}
-          name: 小雨机 4.9.1 构建 ${{ github.run_number }}
-          body: 正式签名 APK（小雨机 V4.9.1：剧情播报只读引号对白；互动页右下角可拖动单按钮（聊天/音视频）；互动页聊天自动参考当前日常/剧情模式的对话与人格）。覆盖安装即可（不要卸载）。对应提交 ${{ github.sha }}。
+          tag_name: v4.10.0-b${{ github.run_number }}
+          name: 小雨机 4.10.0 构建 ${{ github.run_number }}
+          body: 正式签名 APK（小雨机 V4.10.0：移除离线音色模型（卡顿/闪退根源），改用系统 TTS 引擎音色列表——即时合成零卡顿，可按角色选择音色+语速音调；APK 减小约 90MB；剧情播报加强过滤动作/旁白/内心标签）。覆盖安装即可（不要卸载）。对应提交 ${{ github.sha }}。
           files: build/app/outputs/flutter-apk/app-release.apk

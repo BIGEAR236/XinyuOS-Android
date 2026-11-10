@@ -6,7 +6,6 @@ import 'package:speech_to_text/speech_to_text.dart' as speech;
 import '../app_controller.dart';
 import '../v42/animated_portrait.dart';
 import '../v43/offline_stt.dart';
-import '../v43/offline_tts.dart';
 import '../v43/tts_speech_filter.dart';
 import 'avatar_core.dart';
 
@@ -33,20 +32,28 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
   /// the bundled sherpa-onnx engine for ROMs without any system service.
   String engine = 'system';
   final XyOfflineStt offline = XyOfflineStt();
-  /// Neural voice bank: voiceSid >= 0 speaks replies with the bundled
-  /// theresa model (sid), -1 keeps the system TTS. Persisted per role in
-  /// DigitalPersonConfig.voiceId as '' or 'sid:N'.
-  final XyOfflineTts voice = XyOfflineTts();
-  int voiceSid = -1;
-  bool voiceReady = false;
+  /// Speech synthesis uses the SYSTEM TTS engine (instant, no memory blowup,
+  /// no crashes). Per role we persist a chosen system voice + rate/pitch in
+  /// DigitalPersonConfig.voiceId as '' or 'sys|name|locale|rate|pitch'.
+  String voiceName = '';
+  String voiceLocale = '';
+  double speechRate = 0.49;
+  double speechPitch = 1.0;
   /// Hands-free conversation loop: listen -> (endpoint) -> send -> TTS ->
   /// listen again. Only with the offline engine (native endpoint detection).
   bool convo = false;
   String convoState = ''; // '' | 'listening' | 'thinking' | 'speaking'
   Timer? _convoDebounce;
+  /// True while a multi-part speak sequence (first sentence + remainder) is
+  /// running: per-utterance completion handlers must NOT resume listening;
+  /// only the end of the whole sequence (or a manual stop) may.
+  bool _speakingSequence = false;
   @override void initState() {
     super.initState();
     _init();
+    // Await full playback so the hands-free loop and first-sentence
+    // pre-speak can sequence utterances on the system engine.
+    speaker.awaitSpeakCompletion(true);
     speaker.setStartHandler(() { if (mounted) setState(() => talking = true); });
     speaker.setCompletionHandler(() {
       if (!mounted) return;
@@ -85,25 +92,39 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
     }
     try {
       await speaker.setLanguage('zh-CN');
-      await speaker.setSpeechRate(.49);
+      await _applyVoiceId(p.voiceId);
     } catch (_) { /* TTS may have no Chinese voice; manual text remains available. */ }
-    _applyVoiceId(p.voiceId);
-    if (voiceSid >= 0) {
-      // Warm the neural voice bank in the background (first copy ~130MB).
-      voice.init().then((ok) {
-        if (mounted) setState(() => voiceReady = ok);
-      });
-    }
     if (mounted) setState(() => profile = p);
   }
-  void _applyVoiceId(String value) {
-    voiceSid = value.startsWith('sid:') ?
-      int.tryParse(value.substring(4)) ?? -1 : -1;
+  /// Applies 'sys|name|locale|rate|pitch' (or '' for engine defaults) to the
+  /// system TTS engine. Best-effort: unknown voices are ignored by engines.
+  Future<void> _applyVoiceId(String value) async {
+    final parts = value.split('|');
+    if (parts.length == 5 && parts[0] == 'sys') {
+      voiceName = parts[1];
+      voiceLocale = parts[2];
+      speechRate = double.tryParse(parts[3]) ?? 0.49;
+      speechPitch = double.tryParse(parts[4]) ?? 1.0;
+    } else {
+      voiceName = ''; voiceLocale = '';
+      speechRate = 0.49; speechPitch = 1.0;
+    }
+    await _pushVoiceToEngine();
+  }
+  Future<void> _pushVoiceToEngine() async {
+    try {
+      if (voiceName.isNotEmpty) {
+        await speaker.setVoice({'name': voiceName, 'locale': voiceLocale});
+      }
+      await speaker.setSpeechRate(speechRate.clamp(0.0, 1.0));
+      await speaker.setPitch(speechPitch.clamp(0.5, 2.0));
+    } catch (_) { /* engine may reject the voice; defaults still work */ }
   }
   Future<void> _persistVoiceId() async {
     final p = profile;
     if (p == null) return;
-    p.voiceId = voiceSid >= 0 ? 'sid:$voiceSid' : '';
+    p.voiceId = voiceName.isEmpty ? '' :
+      'sys|$voiceName|$voiceLocale|${speechRate.toStringAsFixed(2)}|${speechPitch.toStringAsFixed(2)}';
     await DigitalPersonStore.save(p);
   }
   void _speechHelp() {
@@ -176,28 +197,25 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
     await speaker.stop();
     setState(() { sending = true; listening = false; status = '正在联系原聊天模型…'; });
     final thread = widget.controller.activePrivateThread(widget.roleId);
-    // Streaming first-sentence pre-speak (offline voice channel): as soon as
-    // the LLM stream yields one complete sentence, synthesize and play it;
-    // the rest of the reply continues seamlessly afterwards. This cuts the
-    // time-to-first-sound from (full reply + full synthesis) to (first
-    // sentence + first-sentence synthesis).
+    // Streaming first-sentence pre-speak (system TTS engine): as soon as
+    // the LLM stream yields one complete sentence, speak it; the rest of
+    // the reply continues right after. awaitSpeakCompletion(true) makes
+    // speak() resolve when playback ends, so utterances queue naturally.
     var preSpoken = '';
     var preSource = '';
     var preSpeakDone = Future<void>.value();
     Timer? streamPoll;
-    if (voiceSid >= 0 && voiceReady) {
-      streamPoll = Timer.periodic(const Duration(milliseconds: 250), (_) {
-        final partial = widget.controller.partialReplies[thread] ?? '';
-        if (partial.length <= preSource.length || preSpoken.isNotEmpty) return;
-        preSource = partial;
-        final first = _firstSpeakableSentence(spokenText(partial));
-        if (first == null) return;
-        preSpoken = first;
-        if (convo) setState(() => convoState = 'speaking');
-        if (mounted) setState(() => talking = true);
-        preSpeakDone = voice.speak(first, sid: voiceSid);
-      });
-    }
+    streamPoll = Timer.periodic(const Duration(milliseconds: 250), (_) {
+      final partial = widget.controller.partialReplies[thread] ?? '';
+      if (partial.length <= preSource.length || preSpoken.isNotEmpty) return;
+      preSource = partial;
+      final first = _firstSpeakableSentence(spokenText(partial));
+      if (first == null) return;
+      preSpoken = first;
+      if (convo) setState(() => convoState = 'speaking');
+      _speakingSequence = true;
+      preSpeakDone = speaker.speak(first);
+    });
     try {
       final oldCount = widget.controller.threadMessages(thread)
         .where((m) => m.senderId == role.id).length;
@@ -212,30 +230,27 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
       // tokens would otherwise be read aloud verbatim (esp. story mode).
       final speakable = spokenText(
           answer.length > 1200 ? answer.substring(answer.length - 1200) : answer);
-      if (voiceSid >= 0 && voiceReady) {
-        // Skip what the pre-speak already covered, then continue playing.
-        var remaining = speakable;
-        if (preSpoken.isNotEmpty) {
-          if (speakable.startsWith(preSpoken)) {
-            remaining = speakable.substring(preSpoken.length);
-          } else if (speakable.contains(preSpoken)) {
-            remaining = speakable.substring(
-                speakable.indexOf(preSpoken) + preSpoken.length);
-          }
+      // Skip what the pre-speak already covered, then continue speaking.
+      var remaining = speakable;
+      if (preSpoken.isNotEmpty) {
+        if (speakable.startsWith(preSpoken)) {
+          remaining = speakable.substring(preSpoken.length);
+        } else if (speakable.contains(preSpoken)) {
+          remaining = speakable.substring(
+              speakable.indexOf(preSpoken) + preSpoken.length);
         }
-        await preSpeakDone; // Let the first sentence finish uninterrupted.
-        if (!mounted) return;
-        if (remaining.isNotEmpty) {
-          if (convo) setState(() => convoState = 'speaking');
-          setState(() => talking = true);
-          await voice.speak(remaining, sid: voiceSid);
-        }
-        if (!mounted) return;
-        setState(() => talking = false);
-        _onSpeakDone();
-      } else if (speakable.isNotEmpty) {
-        await _speakOut(speakable);
-      } else if (convo) {
+      }
+      await preSpeakDone; // Let the first sentence finish uninterrupted.
+      if (!mounted) return;
+      if (remaining.isNotEmpty) {
+        if (convo) setState(() => convoState = 'speaking');
+        await speaker.speak(
+            remaining.length > 900 ? remaining.substring(0, 900) : remaining);
+      }
+      _speakingSequence = false;
+      _onSpeakDone();
+      if (!mounted) return;
+      if (speakable.isEmpty && preSpoken.isEmpty && convo) {
         _convoListen(); // Nothing speakable (pure actions): keep listening.
       }
     } catch (e) {
@@ -245,6 +260,7 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
     }
     finally {
       streamPoll?.cancel();
+      _speakingSequence = false;
       if (mounted) setState(() => sending = false);
     }
   }
@@ -261,33 +277,42 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
     return null;
   }
 
-  // ---- Unified speech output (system TTS or bundled neural voices) ----
+  // ---- Unified speech output: system TTS engine ----
+  /// speak() resolves when playback finishes (awaitSpeakCompletion), and the
+  /// completion handler drives the hands-free loop afterwards.
   Future<void> _speakOut(String text) async {
+    if (text.isEmpty) { _onSpeakDone(); return; }
+    if (convo) setState(() => convoState = 'speaking');
     final capped = text.length > 900 ? text.substring(0, 900) : text;
-    if (voiceSid >= 0 && voiceReady) {
-      if (convo) setState(() => convoState = 'speaking');
-      if (mounted) setState(() => talking = true);
-      await voice.speak(capped, sid: voiceSid);
-      if (!mounted) return;
-      setState(() => talking = false);
-      _onSpeakDone();
-    } else {
-      if (convo) setState(() => convoState = 'speaking');
-      await speaker.speak(capped); // completion handler calls _onSpeakDone.
-    }
+    await speaker.speak(capped);
   }
   void _onSpeakDone() {
-    // Hands-free loop: resume listening right after the reply finished.
+    // Only the END of a full sequence (or a manual stop) resumes listening;
+    // intermediate utterance completions inside a sequence are ignored.
+    if (_speakingSequence) return;
     if (convo && convoState == 'speaking') _convoListen();
   }
   Future<void> _stopSpeaking() async {
+    _speakingSequence = false; // Manual stop: let completion resume listening.
     await speaker.stop();
-    await voice.stop();
   }
 
-  // ---- Voice bank picker ----
+  // ---- Voice picker (system TTS engine voices) ----
   Future<void> _voiceSheet() async {
-    var auditioning = -1; // sid currently synthesizing (UI hint).
+    var audition = '';
+    var voices = <Map<dynamic, dynamic>>[];
+    var loading = true;
+    try {
+      final raw = await speaker.getVoices();
+      voices = raw.whereType<Map<dynamic, dynamic>>().toList()
+        ..sort((a, b) {
+          int zh(Map v) =>
+              ('${v['locale'] ?? ''}').toLowerCase().startsWith('zh') ? 0 : 1;
+          return zh(a) - zh(b);
+        });
+    } catch (_) { /* some engines report no voices */ }
+    loading = false;
+    if (!mounted) return;
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -295,73 +320,73 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
         SafeArea(child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
           ListTile(title: Text('为「${widget.controller.character(widget.roleId)?.name ?? 'TA'}」选择音色',
             style: const TextStyle(fontWeight: FontWeight.bold)),
-            subtitle: Text(voiceReady
-              ? '内置 ${voice.numSpeakers} 个音色 · 女声 3-57 · 男声 58-102 · 点“试听”挑最合适的'
-              : voiceSid >= 0 ? '离线音色引擎加载中（首次约 10 秒）…'
-              : '离线音色引擎未加载，选择音色后将自动加载'),
+            subtitle: Text(voiceName.isNotEmpty
+              ? '当前：$voiceName（语速 ${(speechRate * 100).round()}% · 音调 ${speechPitch.toStringAsFixed(1)}）'
+              : '使用手机 TTS 引擎的音色（即时合成、不卡顿）。音色数量取决于手机厂商引擎。'),
           ),
-          RadioListTile<int>(
-            title: const Text('系统音色（手机自带）'),
-            subtitle: const Text('默认。音色取决于手机 TTS 引擎。'),
-            value: -1, groupValue: voiceSid,
-            onChanged: (v) { refresh(() {}); setState(() => voiceSid = v ?? -1); _persistVoiceId(); },
+          ListTile(
+            leading: const Icon(Icons.smart_toy_outlined),
+            title: const Text('恢复引擎默认音色'),
+            subtitle: const Text('清除本角色的专属音色设置'),
+            trailing: voiceName.isEmpty
+              ? const Icon(Icons.check_circle, color: Color(0xFF8A70AD), size: 20) : null,
+            onTap: () {
+              setState(() { voiceName = ''; voiceLocale = ''; });
+              _pushVoiceToEngine(); _persistVoiceId(); refresh(() {});
+            },
           ),
           const Divider(),
-          for (final preset in voicePresets)
-            ListTile(
-              leading: CircleAvatar(radius: 17, backgroundColor: preset.male
-                ? const Color(0xFFDCE7F5) : const Color(0xFFF6DDE9),
-                child: Icon(preset.male ? Icons.face_6_rounded : Icons.face_3_rounded,
-                  size: 16, color: preset.male ? const Color(0xFF5D7BA8) : const Color(0xFFB7739B))),
-              title: Text('${preset.name} · ${preset.hint}'),
-              subtitle: Text('编号 ${preset.sid} · ${preset.male ? "男声" : "女声"}（性别确定，音色以试听为准）'),
-              trailing: Wrap(spacing: 4, children: [
-                TextButton(
-                  onPressed: !voiceReady || auditioning >= 0 ? null : () async {
-                    refresh(() => auditioning = preset.sid);
-                    // Let the hint paint BEFORE the blocking synthesis.
-                    await Future<void>.delayed(const Duration(milliseconds: 100));
+          if (loading) const Padding(padding: EdgeInsets.all(16),
+            child: CircularProgressIndicator()),
+          if (!loading && voices.isEmpty)
+            const Padding(padding: EdgeInsets.all(16),
+              child: Text('手机 TTS 引擎未报告音色列表。可在系统设置→语言和输入法→文字转语音中更换或更新引擎（如讯飞、Google），就能得到更多音色。',
+                style: TextStyle(fontSize: 12))),
+          for (final v in voices)
+            () {
+              final name = '${v['name'] ?? ''}';
+              final locale = '${v['locale'] ?? ''}';
+              final selected = name == voiceName;
+              return ListTile(
+                dense: true,
+                leading: Icon(locale.toLowerCase().startsWith('zh')
+                  ? Icons.record_voice_over_rounded : Icons.translate_rounded,
+                  size: 20, color: const Color(0xFF8A70AD)),
+                title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
+                subtitle: Text(locale, style: const TextStyle(fontSize: 11)),
+                trailing: Wrap(spacing: 4, children: [
+                  TextButton(onPressed: audition.isNotEmpty ? null : () async {
+                    refresh(() => audition = name);
                     await speaker.stop();
-                    await voice.speak('你好，很高兴和你聊天，这就是这个音色的声音。', sid: preset.sid);
-                    refresh(() => auditioning = -1);
-                  },
-                  child: Text(auditioning == preset.sid ? '合成中…' : '试听')),
-                if (voiceSid == preset.sid)
-                  const Icon(Icons.check_circle, color: Color(0xFF8A70AD), size: 20)
-                else TextButton(onPressed: auditioning >= 0 ? null : () {
-                  setState(() => voiceSid = preset.sid);
-                  _persistVoiceId();
-                  if (!voiceReady) {
-                    voice.init().then((ok) {
-                      if (mounted) setState(() => voiceReady = ok);
-                    });
-                  }
-                  refresh(() {});
-                }, child: const Text('使用')),
-              ]),
-            ),
-          Padding(padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-            child: Row(children: [
-              Expanded(child: Text('自定义编号（女声 3-57 · 男声 58-102）：',
-                style: const TextStyle(fontSize: 12))),
-              SizedBox(width: 74, child: TextField(
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(isDense: true, hintText: '如 72'),
-                onSubmitted: (value) {
-                  final sid = int.tryParse(value.trim());
-                  if (sid == null || sid < 0) return;
-                  setState(() => voiceSid = sid);
-                  _persistVoiceId();
-                  if (!voiceReady) {
-                    voice.init().then((ok) {
-                      if (mounted) setState(() => voiceReady = ok);
-                    });
-                  }
-                  refresh(() {});
-                })),
-            ])),
+                    await speaker.setVoice({'name': name, 'locale': locale});
+                    await speaker.speak('你好，这就是这个音色的声音，喜欢就点使用吧。');
+                    await _pushVoiceToEngine(); // restore role voice afterwards
+                    refresh(() => audition = '');
+                  }, child: Text(audition == name ? '试听中' : '试听')),
+                  if (selected)
+                    const Icon(Icons.check_circle, color: Color(0xFF8A70AD), size: 20)
+                  else TextButton(onPressed: audition.isNotEmpty ? null : () {
+                    setState(() { voiceName = name; voiceLocale = locale; });
+                    _pushVoiceToEngine(); _persistVoiceId(); refresh(() {});
+                  }, child: const Text('使用')),
+                ]),
+              );
+            }(),
+          const Divider(),
+          ListTile(title: const Text('语速', style: TextStyle(fontSize: 14)),
+            subtitle: Slider(min: 0.1, max: 1.0, divisions: 18,
+              value: speechRate.clamp(0.1, 1.0).toDouble(),
+              label: '${(speechRate * 100).round()}%',
+              onChanged: (v) { setState(() => speechRate = v); refresh(() {}); },
+              onChangeEnd: (_) { _pushVoiceToEngine(); _persistVoiceId(); })),
+          ListTile(title: const Text('音调', style: TextStyle(fontSize: 14)),
+            subtitle: Slider(min: 0.5, max: 2.0, divisions: 15,
+              value: speechPitch.clamp(0.5, 2.0).toDouble(),
+              label: speechPitch.toStringAsFixed(1),
+              onChanged: (v) { setState(() => speechPitch = v); refresh(() {}); },
+              onChangeEnd: (_) { _pushVoiceToEngine(); _persistVoiceId(); })),
           const Padding(padding: EdgeInsets.only(bottom: 10),
-            child: Text('编号性别由官方音色表保证；每个人的听感不同，多试听几个总能遇到合适的。',
+            child: Text('音色来自手机系统 TTS 引擎，即时合成不卡顿；音色少可到系统设置更换/更新 TTS 引擎。',
               style: TextStyle(fontSize: 11, color: Colors.black54))),
         ])))),
       );
@@ -428,7 +453,6 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
     recognizer.cancel();
     speaker.stop();
     offline.dispose();
-    voice.dispose();
     input.dispose();
     super.dispose();
   }
