@@ -81,7 +81,7 @@ class XyIconSettings extends StatelessWidget {
             return ListTile(title:Text(labels[id]??id),
               subtitle:Text(customized?'已自定义 · 点击更换':'默认图标 · 点击设置图片'),
               leading:customized
-                ?CircleAvatar(radius:26,backgroundImage:FileImage(file!))
+                ?CircleAvatar(radius:26,backgroundImage:FileImage(file))
                 :CircleAvatar(radius:26,backgroundColor:preset.$2.withValues(alpha:.18),
                   child:Icon(preset.$1,color:preset.$2)),
               trailing:IconButton(tooltip:'恢复系统图标',onPressed:()=>controller.clearDesktopIcon(id),

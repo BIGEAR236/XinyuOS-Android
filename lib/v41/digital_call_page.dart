@@ -259,7 +259,7 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
       if (convo && mounted) _convoListen(); // Let the user retry by voice.
     }
     finally {
-      streamPoll?.cancel();
+      streamPoll.cancel();
       _speakingSequence = false;
       if (mounted) setState(() => sending = false);
     }
@@ -277,15 +277,6 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
     return null;
   }
 
-  // ---- Unified speech output: system TTS engine ----
-  /// speak() resolves when playback finishes (awaitSpeakCompletion), and the
-  /// completion handler drives the hands-free loop afterwards.
-  Future<void> _speakOut(String text) async {
-    if (text.isEmpty) { _onSpeakDone(); return; }
-    if (convo) setState(() => convoState = 'speaking');
-    final capped = text.length > 900 ? text.substring(0, 900) : text;
-    await speaker.speak(capped);
-  }
   void _onSpeakDone() {
     // Only the END of a full sequence (or a manual stop) resumes listening;
     // intermediate utterance completions inside a sequence are ignored.
@@ -342,36 +333,35 @@ class _DigitalCallPageState extends State<DigitalCallPage> {
             const Padding(padding: EdgeInsets.all(16),
               child: Text('手机 TTS 引擎未报告音色列表。可在系统设置→语言和输入法→文字转语音中更换或更新引擎（如讯飞、Google），就能得到更多音色。',
                 style: TextStyle(fontSize: 12))),
-          for (final v in voices)
-            () {
-              final name = '${v['name'] ?? ''}';
-              final locale = '${v['locale'] ?? ''}';
-              final selected = name == voiceName;
-              return ListTile(
-                dense: true,
-                leading: Icon(locale.toLowerCase().startsWith('zh')
-                  ? Icons.record_voice_over_rounded : Icons.translate_rounded,
-                  size: 20, color: const Color(0xFF8A70AD)),
-                title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
-                subtitle: Text(locale, style: const TextStyle(fontSize: 11)),
-                trailing: Wrap(spacing: 4, children: [
-                  TextButton(onPressed: audition.isNotEmpty ? null : () async {
-                    refresh(() => audition = name);
-                    await speaker.stop();
-                    await speaker.setVoice({'name': name, 'locale': locale});
-                    await speaker.speak('你好，这就是这个音色的声音，喜欢就点使用吧。');
-                    await _pushVoiceToEngine(); // restore role voice afterwards
-                    refresh(() => audition = '');
-                  }, child: Text(audition == name ? '试听中' : '试听')),
-                  if (selected)
-                    const Icon(Icons.check_circle, color: Color(0xFF8A70AD), size: 20)
-                  else TextButton(onPressed: audition.isNotEmpty ? null : () {
-                    setState(() { voiceName = name; voiceLocale = locale; });
-                    _pushVoiceToEngine(); _persistVoiceId(); refresh(() {});
-                  }, child: const Text('使用')),
-                ]),
-              );
-            }(),
+          ...voices.map((v) {
+            final name = '${v['name'] ?? ''}';
+            final locale = '${v['locale'] ?? ''}';
+            final selected = name == voiceName;
+            return ListTile(
+              dense: true,
+              leading: Icon(locale.toLowerCase().startsWith('zh')
+                ? Icons.record_voice_over_rounded : Icons.translate_rounded,
+                size: 20, color: const Color(0xFF8A70AD)),
+              title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
+              subtitle: Text(locale, style: const TextStyle(fontSize: 11)),
+              trailing: Wrap(spacing: 4, children: [
+                TextButton(onPressed: audition.isNotEmpty ? null : () async {
+                  refresh(() => audition = name);
+                  await speaker.stop();
+                  await speaker.setVoice({'name': name, 'locale': locale});
+                  await speaker.speak('你好，这就是这个音色的声音，喜欢就点使用吧。');
+                  await _pushVoiceToEngine(); // restore role voice afterwards
+                  refresh(() => audition = '');
+                }, child: Text(audition == name ? '试听中' : '试听')),
+                if (selected)
+                  const Icon(Icons.check_circle, color: Color(0xFF8A70AD), size: 20)
+                else TextButton(onPressed: audition.isNotEmpty ? null : () {
+                  setState(() { voiceName = name; voiceLocale = locale; });
+                  _pushVoiceToEngine(); _persistVoiceId(); refresh(() {});
+                }, child: const Text('使用')),
+              ]),
+            );
+          }),
           const Divider(),
           ListTile(title: const Text('语速', style: TextStyle(fontSize: 14)),
             subtitle: Slider(min: 0.1, max: 1.0, divisions: 18,
